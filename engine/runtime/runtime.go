@@ -16,7 +16,7 @@ import (
 type Runtime struct {
 	wazeroRuntime wazero.Runtime
 	compiledModule wazero.CompiledModule
-	hostAPI       *host.HostAPI
+	hostAPI       *host.API
 	config        *Config
 }
 
@@ -100,7 +100,24 @@ func (r *Runtime) Execute(ctx context.Context, functionName string, params []uin
 	gasMeter := gas.NewMeter(gas.GasLimit(r.config.GasLimit))
 
 	// Create host API
-	r.hostAPI = host.NewHostAPI(gasMeter, kvStore)
+	r.hostAPI = host.NewAPI(gasMeter, kvStore)
+
+	// Register host bindings
+	hostModuleBuilder := r.wazeroRuntime.NewHostModuleBuilder("accuwasm_host")
+	if err := RegisterHostBindings(ctx, hostModuleBuilder, r.hostAPI); err != nil {
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to register host bindings: %w", err),
+		}, nil
+	}
+
+	// Instantiate the host module
+	if _, err := hostModuleBuilder.Instantiate(ctx); err != nil {
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to instantiate host module: %w", err),
+		}, nil
+	}
 
 	// Configure module with host functions and gas metering
 	moduleConfig := wazero.NewModuleConfig().
