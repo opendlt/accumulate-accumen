@@ -221,6 +221,164 @@ To view the metadata written to the DN:
    INFO[2024-01-15T10:35:15Z] Metadata written successfully               calls=3 total_bytes=2048
    ```
 
+## Deploying a Contract via RPC
+
+Accumen supports deploying WASM smart contracts through the JSON-RPC API. Contracts are stored persistently and referenced by their Accumulate-style addresses.
+
+### Prerequisites
+
+- Accumen sequencer running with RPC server enabled
+- WASM contract bytecode (compiled from Rust, AssemblyScript, etc.)
+- Contract must be between 1 KB and 2 MB in size
+- Valid WASM module with magic bytes `\x00asm`
+
+### Deployment Process
+
+#### 1. Prepare Contract Bytecode
+
+Convert your WASM contract to base64 format:
+
+```bash
+# Example: Convert counter.wasm to base64
+base64 -i counter.wasm -o counter.wasm.b64
+
+# Or use command line tools
+cat counter.wasm | base64 > counter.wasm.b64
+```
+
+#### 2. Deploy via JSON-RPC
+
+Use the `accumen.deployContract` method:
+
+**Request:**
+```bash
+curl -X POST http://127.0.0.1:8666 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "method": "accumen.deployContract",
+    "params": {
+      "addr": "acc://counter.acme",
+      "wasm_b64": "AGFzbQEAAAAB..."
+    }
+  }'
+```
+
+**Response:**
+```json
+{
+  "id": 1,
+  "result": {
+    "wasm_hash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
+  }
+}
+```
+
+#### 3. Using accucli
+
+Alternatively, you can use the CLI tool for easier deployment:
+
+```bash
+# Deploy contract using CLI (future enhancement)
+./bin/accucli deploy \
+  --addr=acc://counter.acme \
+  --wasm=./counter.wasm \
+  --rpc=http://127.0.0.1:8666
+```
+
+### Contract Storage
+
+Deployed contracts are stored differently based on the storage backend:
+
+#### Memory Backend (`storage.backend: "memory"`)
+- WASM bytecode stored directly in the key-value store
+- Metadata and bytecode kept in RAM
+- Faster execution but not persistent across restarts
+
+#### Badger Backend (`storage.backend: "badger"`)
+- WASM bytecode stored as files in `data/wasm/<hash>.wasm`
+- Metadata stored in Badger database
+- Persistent across restarts
+- Optimized for disk storage
+
+### Contract Execution
+
+Once deployed, contracts can be invoked via transactions:
+
+```bash
+# Submit transaction to deployed contract
+./bin/accucli submit \
+  --contract=acc://counter.acme \
+  --entry=increment \
+  --arg=amount:1 \
+  --rpc=http://127.0.0.1:8666
+```
+
+### Error Handling
+
+Common deployment errors:
+
+1. **Invalid Address Format:**
+   ```json
+   {"error": {"code": -32602, "message": "Invalid address format, must start with 'acc://'"}}
+   ```
+
+2. **Contract Already Exists:**
+   ```json
+   {"error": {"code": -32602, "message": "Contract already deployed at address: acc://counter.acme"}}
+   ```
+
+3. **Invalid WASM:**
+   ```json
+   {"error": {"code": -32602, "message": "Invalid WASM module: missing magic bytes"}}
+   ```
+
+4. **Size Limits:**
+   ```json
+   {"error": {"code": -32602, "message": "WASM module too large: 3145728 bytes (max: 2097152)"}}
+   ```
+
+### Contract Lifecycle
+
+1. **Deployment:** WASM module uploaded and validated
+2. **Storage:** Bytecode and metadata persisted
+3. **Execution:** Runtime loads module for transaction processing
+4. **State:** Contract state managed through key-value operations
+5. **Upgrades:** Deploy new version at different address (no in-place upgrades)
+
+### Development Workflow
+
+For contract development:
+
+```bash
+# 1. Develop contract (Rust example)
+cd my-contract/
+cargo build --target wasm32-unknown-unknown --release
+
+# 2. Deploy to local Accumen
+base64 -i target/wasm32-unknown-unknown/release/my_contract.wasm | \
+curl -X POST http://127.0.0.1:8666 \
+  -H "Content-Type: application/json" \
+  -d @- << 'EOF'
+{
+  "id": 1,
+  "method": "accumen.deployContract",
+  "params": {
+    "addr": "acc://my-contract.acme",
+    "wasm_b64": "$(cat)"
+  }
+}
+EOF
+
+# 3. Test contract
+./bin/accucli submit --contract=acc://my-contract.acme --entry=test
+
+# 4. Query contract state
+./bin/accucli query --contract=acc://my-contract.acme --key=state
+```
+
+This workflow enables rapid contract development and testing on a local Accumen network.
+
 ## Quick Start
 
 ### Local Development

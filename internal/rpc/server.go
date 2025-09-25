@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,22 +12,25 @@ import (
 	"time"
 
 	"github.com/opendlt/accumulate-accumen/engine/state"
+	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 )
 
 // Server provides a JSON-RPC interface for Accumen
 type Server struct {
-	mu         sync.RWMutex
-	server     *http.Server
-	sequencer  *sequencer.Sequencer
-	kvStore    state.KVStore
-	running    bool
+	mu            sync.RWMutex
+	server        *http.Server
+	sequencer     *sequencer.Sequencer
+	kvStore       state.KVStore
+	contractStore *contracts.Store
+	running       bool
 }
 
 // Dependencies holds the required dependencies for the RPC server
 type Dependencies struct {
-	Sequencer *sequencer.Sequencer
-	KVStore   state.KVStore
+	Sequencer     *sequencer.Sequencer
+	KVStore       state.KVStore
+	ContractStore *contracts.Store
 }
 
 // Request represents a JSON-RPC request
@@ -85,14 +89,27 @@ type QueryParams struct {
 type QueryResult struct {
 	Value  *string `json:"value"`
 	Exists bool    `json:"exists"`
+	Type   string  `json:"type,omitempty"`
+}
+
+// DeployContractParams represents parameters for accumen.deployContract()
+type DeployContractParams struct {
+	Addr   string `json:"addr"`
+	WasmB64 string `json:"wasm_b64"`
+}
+
+// DeployContractResult represents the result of accumen.deployContract()
+type DeployContractResult struct {
+	WasmHash string `json:"wasm_hash"`
 }
 
 // NewServer creates a new RPC server
 func NewServer(deps *Dependencies) *Server {
 	return &Server{
-		sequencer: deps.Sequencer,
-		kvStore:   deps.KVStore,
-		running:   false,
+		sequencer:     deps.Sequencer,
+		kvStore:       deps.KVStore,
+		contractStore: deps.ContractStore,
+		running:       false,
 	}
 }
 
@@ -187,6 +204,8 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		result, err = s.handleSubmitTx(req.Params)
 	case "accumen.query":
 		result, err = s.handleQuery(req.Params)
+	case "accumen.deployContract":
+		result, err = s.handleDeployContract(req.Params)
 	default:
 		err = &RPCError{Code: -32601, Message: "Method not found"}
 	}
@@ -326,7 +345,8 @@ func (s *Server) handleQuery(params interface{}) (interface{}, *RPCError) {
 	stateKey := fmt.Sprintf("%s:%s", queryParams.Contract, queryParams.Key)
 
 	// Query from state store
-	value, exists := s.kvStore.Get([]byte(stateKey))
+	value, err_kv := s.kvStore.Get(stateKey)
+	exists := err_kv == nil
 
 	var valueStr *string
 	if exists && len(value) > 0 {
@@ -338,6 +358,81 @@ func (s *Server) handleQuery(params interface{}) (interface{}, *RPCError) {
 	result := &QueryResult{
 		Value:  valueStr,
 		Exists: exists,
+		Type:   "bytes",
+	}
+
+	return result, nil
+}
+
+// handleDeployContract handles accumen.deployContract() method
+func (s *Server) handleDeployContract(params interface{}) (interface{}, *RPCError) {
+	if s.contractStore == nil {
+		return nil, &RPCError{Code: -32603, Message: "Contract store not available"}
+	}
+
+	// Parse parameters
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+	}
+
+	var deployParams DeployContractParams
+	if err := json.Unmarshal(paramsBytes, &deployParams); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
+	}
+
+	// Validate required fields
+	if deployParams.Addr == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: addr"}
+	}
+	if deployParams.WasmB64 == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: wasm_b64"}
+	}
+
+	// Validate address format
+	if !strings.HasPrefix(deployParams.Addr, "acc://") {
+		return nil, &RPCError{Code: -32602, Message: "Invalid address format, must start with 'acc://'"}
+	}
+
+	// Decode WASM bytecode from base64
+	wasmBytes, err := base64.StdEncoding.DecodeString(deployParams.WasmB64)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid base64 WASM data"}
+	}
+
+	// Validate size limits (1-2 MB)
+	const minSize = 1024        // 1 KB minimum
+	const maxSize = 2 * 1024 * 1024 // 2 MB maximum
+	if len(wasmBytes) < minSize {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM module too small: %d bytes (min: %d)", len(wasmBytes), minSize)}
+	}
+	if len(wasmBytes) > maxSize {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM module too large: %d bytes (max: %d)", len(wasmBytes), maxSize)}
+	}
+
+	// Basic WASM validation - check magic bytes
+	if len(wasmBytes) < 4 || string(wasmBytes[:4]) != "\x00asm" {
+		return nil, &RPCError{Code: -32602, Message: "Invalid WASM module: missing magic bytes"}
+	}
+
+	// Check if contract already exists
+	exists, err := s.contractStore.HasModule(deployParams.Addr)
+	if err != nil {
+		return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Failed to check contract existence: %v", err)}
+	}
+	if exists {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("Contract already deployed at address: %s", deployParams.Addr)}
+	}
+
+	// Save the module
+	hash, err := s.contractStore.SaveModule(deployParams.Addr, wasmBytes)
+	if err != nil {
+		return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Failed to deploy contract: %v", err)}
+	}
+
+	// Return the WASM hash
+	result := &DeployContractResult{
+		WasmHash: hex.EncodeToString(hash[:]),
 	}
 
 	return result, nil

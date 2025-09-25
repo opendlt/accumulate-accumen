@@ -9,6 +9,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/engine/state"
+	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 )
 
 // Block represents a block of transactions
@@ -46,11 +47,12 @@ type ExecResult struct {
 
 // ExecutionEngine handles transaction execution for the sequencer
 type ExecutionEngine struct {
-	mu       sync.RWMutex
-	config   ExecutionConfig
-	runtime  *runtime.Runtime
-	kvStore  state.KVStore
-	gasMeter *gas.Meter
+	mu            sync.RWMutex
+	config        ExecutionConfig
+	runtime       *runtime.Runtime
+	kvStore       state.KVStore
+	contractStore *contracts.Store
+	gasMeter      *gas.Meter
 
 	// State management
 	currentHeight uint64
@@ -81,15 +83,12 @@ type workItem struct {
 }
 
 // NewExecutionEngine creates a new execution engine
-func NewExecutionEngine(config ExecutionConfig) (*ExecutionEngine, error) {
+func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store) (*ExecutionEngine, error) {
 	// Create WASM runtime
 	wasmRuntime, err := runtime.NewRuntime(&config.Runtime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WASM runtime: %w", err)
 	}
-
-	// Create state store
-	kvStore := state.NewMemoryKVStore()
 
 	// Create gas meter
 	gasMeter := gas.NewMeterWithConfig(gas.GasLimit(config.Gas.BaseGas*1000), &config.Gas)
@@ -98,6 +97,7 @@ func NewExecutionEngine(config ExecutionConfig) (*ExecutionEngine, error) {
 		config:        config,
 		runtime:       wasmRuntime,
 		kvStore:       kvStore,
+		contractStore: contractStore,
 		gasMeter:      gasMeter,
 		currentHeight: 0,
 		stateRoot:     make([]byte, 32), // Genesis state root
@@ -280,8 +280,24 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 	// Create gas meter for this transaction
 	txGasMeter := gas.NewMeterWithConfig(gas.GasLimit(tx.GasLimit), &e.config.Gas)
 
-	// Execute transaction using WASM runtime
-	execResult, err := e.runtime.Execute(ctx, "main", []uint64{}, e.kvStore)
+	// Load WASM module for the contract
+	if e.contractStore == nil {
+		result.Success = false
+		result.Error = "contract store not available"
+		result.ExecutionTime = time.Since(startTime)
+		return result
+	}
+
+	wasmBytes, wasmHash, err := e.contractStore.GetModule(tx.To)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("contract not found: %s - %v", tx.To, err)
+		result.ExecutionTime = time.Since(startTime)
+		return result
+	}
+
+	// Execute transaction using WASM runtime with the loaded module
+	execResult, err := e.runtime.ExecuteContract(ctx, wasmBytes, wasmHash[:], "main", []uint64{}, e.kvStore)
 	if err != nil {
 		result.Success = false
 		result.Error = err.Error()
