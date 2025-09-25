@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/state"
+	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 	"github.com/opendlt/accumulate-accumen/internal/config"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
@@ -156,12 +158,26 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 	logger.Info("DN paths - Anchors: %s, TxMeta: %s", cfg.DNPaths.Anchors, cfg.DNPaths.TxMeta)
 	logger.Info("Storage: backend=%s, path=%s", cfg.Storage.Backend, cfg.Storage.Path)
 
+	// Create contract store
+	contractStore := contracts.NewStore(kvStore, cfg.Storage.Path)
+
+	// Create pricing schedule provider
+	scheduleProvider := pricing.Cached(
+		pricing.CreateDNProvider(apiClient, cfg.Pricing.GasScheduleID),
+		cfg.GetPricingRefreshDuration(),
+	)
+
+	// Start background schedule refresh
+	scheduleProvider.StartAutoRefresh(ctx)
+	logger.Info("Gas schedule provider started: ID=%s, refresh=%v", cfg.Pricing.GasScheduleID, cfg.GetPricingRefreshDuration())
+
 	// Start RPC server if address is provided
 	var rpcServer *rpc.Server
 	if *rpcAddr != "" {
 		rpcServer = rpc.NewServer(&rpc.Dependencies{
-			Sequencer: seq,
-			KVStore:   kvStore,
+			Sequencer:     seq,
+			KVStore:       kvStore,
+			ContractStore: contractStore,
 		})
 
 		if err := rpcServer.Start(*rpcAddr); err != nil {
@@ -177,6 +193,12 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 	logger.Info("Shutting down sequencer...")
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+
+	// Stop schedule provider
+	if scheduleProvider != nil {
+		scheduleProvider.Stop()
+		logger.Info("Gas schedule provider stopped")
+	}
 
 	// Stop RPC server first
 	if rpcServer != nil {

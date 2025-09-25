@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/engine/state"
@@ -47,12 +48,13 @@ type ExecResult struct {
 
 // ExecutionEngine handles transaction execution for the sequencer
 type ExecutionEngine struct {
-	mu            sync.RWMutex
-	config        ExecutionConfig
-	runtime       *runtime.Runtime
-	kvStore       state.KVStore
-	contractStore *contracts.Store
-	gasMeter      *gas.Meter
+	mu               sync.RWMutex
+	config           ExecutionConfig
+	runtime          *runtime.Runtime
+	kvStore          state.KVStore
+	contractStore    *contracts.Store
+	gasMeter         *gas.Meter
+	scheduleProvider *pricing.ScheduleProvider
 
 	// State management
 	currentHeight uint64
@@ -83,25 +85,40 @@ type workItem struct {
 }
 
 // NewExecutionEngine creates a new execution engine
-func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store) (*ExecutionEngine, error) {
+func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider) (*ExecutionEngine, error) {
 	// Create WASM runtime
 	wasmRuntime, err := runtime.NewRuntime(&config.Runtime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WASM runtime: %w", err)
 	}
 
-	// Create gas meter
-	gasMeter := gas.NewMeterWithConfig(gas.GasLimit(config.Gas.BaseGas*1000), &config.Gas)
+	// Create gas meter with initial schedule
+	var gasConfig gas.Config
+	if scheduleProvider != nil {
+		schedule := scheduleProvider.Get()
+		gasConfig = gas.Config{
+			BaseGas:    config.Gas.BaseGas,
+			GCR:        schedule.GetGCR(),
+			HostCosts:  schedule.HostCosts,
+			PerByteRead:  schedule.GetReadCost(),
+			PerByteWrite: schedule.GetWriteCost(),
+		}
+	} else {
+		gasConfig = config.Gas
+	}
+
+	gasMeter := gas.NewMeterWithConfig(gas.GasLimit(gasConfig.BaseGas*1000), &gasConfig)
 
 	engine := &ExecutionEngine{
-		config:        config,
-		runtime:       wasmRuntime,
-		kvStore:       kvStore,
-		contractStore: contractStore,
-		gasMeter:      gasMeter,
-		currentHeight: 0,
-		stateRoot:     make([]byte, 32), // Genesis state root
-		workQueue:     make(chan *workItem, config.WorkerCount*2),
+		config:           config,
+		runtime:          wasmRuntime,
+		kvStore:          kvStore,
+		contractStore:    contractStore,
+		gasMeter:         gasMeter,
+		scheduleProvider: scheduleProvider,
+		currentHeight:    0,
+		stateRoot:        make([]byte, 32), // Genesis state root
+		workQueue:        make(chan *workItem, config.WorkerCount*2),
 	}
 
 	// Initialize worker pool if parallel execution is enabled
@@ -277,8 +294,21 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		StateChanges:  make([]state.StateChange, 0),
 	}
 
-	// Create gas meter for this transaction
-	txGasMeter := gas.NewMeterWithConfig(gas.GasLimit(tx.GasLimit), &e.config.Gas)
+	// Create gas meter for this transaction with current schedule
+	var gasConfig gas.Config
+	if e.scheduleProvider != nil {
+		schedule := e.scheduleProvider.Get()
+		gasConfig = gas.Config{
+			BaseGas:      e.config.Gas.BaseGas,
+			GCR:          schedule.GetGCR(),
+			HostCosts:    schedule.HostCosts,
+			PerByteRead:  schedule.GetReadCost(),
+			PerByteWrite: schedule.GetWriteCost(),
+		}
+	} else {
+		gasConfig = e.config.Gas
+	}
+	txGasMeter := gas.NewMeterWithConfig(gas.GasLimit(tx.GasLimit), &gasConfig)
 
 	// Load WASM module for the contract
 	if e.contractStore == nil {
@@ -310,6 +340,12 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		result.Success = true
 		result.GasUsed = execResult.GasUsed
 		result.Receipt = execResult.Receipt
+
+		// Calculate credits from gas used using current schedule
+		if e.scheduleProvider != nil {
+			schedule := e.scheduleProvider.Get()
+			result.Receipt.CreditsUsed = schedule.CalculateCredits(result.GasUsed)
+		}
 		result.StagedOps = execResult.StagedOps
 		result.Events = execResult.Events
 
@@ -504,4 +540,27 @@ func (e *ExecutionEngine) Close(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// GetScheduleStats returns statistics about the pricing schedule
+func (e *ExecutionEngine) GetScheduleStats() *pricing.ProviderStats {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.scheduleProvider != nil {
+		stats := e.scheduleProvider.GetStats()
+		return &stats
+	}
+	return nil
+}
+
+// GetCurrentSchedule returns the current pricing schedule
+func (e *ExecutionEngine) GetCurrentSchedule() *pricing.Schedule {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.scheduleProvider != nil {
+		return e.scheduleProvider.Get()
+	}
+	return pricing.DefaultSchedule()
 }

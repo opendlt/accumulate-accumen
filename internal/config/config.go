@@ -23,6 +23,10 @@ type Config struct {
 		Backend string `yaml:"backend"` // "memory" | "badger"
 		Path    string `yaml:"path"`    // e.g. "data/l1"
 	} `yaml:"storage"`
+	Pricing struct {
+		GasScheduleID   string `yaml:"gasScheduleID"`   // Gas schedule ID to fetch from DN registry
+		RefreshInterval string `yaml:"refreshInterval"` // How often to refresh schedule (e.g., "60s")
+	} `yaml:"pricing"`
 	SequencerKey string `yaml:"sequencerKey"` // hex or base64, placeholder
 }
 
@@ -97,6 +101,14 @@ func (c *Config) setDefaults() error {
 		c.Storage.Path = "data/l1"
 	}
 
+	// Set default pricing configuration
+	if c.Pricing.GasScheduleID == "" {
+		c.Pricing.GasScheduleID = "default"
+	}
+	if c.Pricing.RefreshInterval == "" {
+		c.Pricing.RefreshInterval = "60s"
+	}
+
 	return nil
 }
 
@@ -144,6 +156,16 @@ func (c *Config) validate() error {
 		return fmt.Errorf("storage path cannot be empty")
 	}
 
+	// Validate pricing configuration
+	if c.Pricing.GasScheduleID == "" {
+		return fmt.Errorf("gas schedule ID cannot be empty")
+	}
+	if c.Pricing.RefreshInterval != "" {
+		if _, err := time.ParseDuration(c.Pricing.RefreshInterval); err != nil {
+			return fmt.Errorf("invalid pricing refresh interval %s: %w", c.Pricing.RefreshInterval, err)
+		}
+	}
+
 	return nil
 }
 
@@ -167,8 +189,18 @@ func (c *Config) GetAnchorIntervalDuration() time.Duration {
 	return duration
 }
 
+// GetPricingRefreshDuration returns the pricing refresh interval as a time.Duration
+func (c *Config) GetPricingRefreshDuration() time.Duration {
+	duration, err := time.ParseDuration(c.Pricing.RefreshInterval)
+	if err != nil {
+		// This should not happen if validation passed
+		return 60 * time.Second
+	}
+	return duration
+}
+
 // String returns a string representation of the config
 func (c *Config) String() string {
-	return fmt.Sprintf("Config{Endpoints: %v, BlockTime: %s, AnchorEvery: %s, AnchorEveryN: %d}",
-		c.APIV3Endpoints, c.BlockTime, c.AnchorEvery, c.AnchorEveryN)
+	return fmt.Sprintf("Config{Endpoints: %v, BlockTime: %s, AnchorEvery: %s, AnchorEveryN: %d, GasScheduleID: %s}",
+		c.APIV3Endpoints, c.BlockTime, c.AnchorEvery, c.AnchorEveryN, c.Pricing.GasScheduleID)
 }
