@@ -1,0 +1,225 @@
+package state
+
+import (
+	"encoding/json"
+	"time"
+)
+
+// Receipt represents an execution receipt for WASM contract execution
+type Receipt struct {
+	// Execution metadata
+	Success      bool      `json:"success"`
+	Timestamp    time.Time `json:"timestamp"`
+	BlockHeight  uint64    `json:"block_height,omitempty"`
+	TxHash       []byte    `json:"tx_hash,omitempty"`
+
+	// Function execution details
+	FunctionName string    `json:"function_name"`
+	Parameters   [][]byte  `json:"parameters,omitempty"`
+	ReturnValue  []byte    `json:"return_value,omitempty"`
+
+	// Gas and resource usage
+	GasUsed      uint64    `json:"gas_used"`
+	GasLimit     uint64    `json:"gas_limit"`
+	GasPrice     uint64    `json:"gas_price,omitempty"`
+
+	// Memory usage (in pages)
+	MemoryUsed   uint32    `json:"memory_used"`
+	MemoryLimit  uint32    `json:"memory_limit"`
+
+	// Execution time (for performance metrics)
+	ExecutionTime time.Duration `json:"execution_time"`
+
+	// Error information
+	Error        string    `json:"error,omitempty"`
+	ErrorCode    uint32    `json:"error_code,omitempty"`
+
+	// State changes
+	StateChanges []StateChange `json:"state_changes,omitempty"`
+
+	// Logs emitted during execution
+	Logs         []LogEntry `json:"logs,omitempty"`
+}
+
+// StateChange represents a change to the key-value store
+type StateChange struct {
+	Operation Operation `json:"operation"`
+	Key       []byte    `json:"key"`
+	OldValue  []byte    `json:"old_value,omitempty"`
+	NewValue  []byte    `json:"new_value,omitempty"`
+}
+
+// Operation represents the type of state operation
+type Operation uint8
+
+const (
+	OperationSet Operation = iota
+	OperationDelete
+)
+
+// String returns the string representation of an operation
+func (op Operation) String() string {
+	switch op {
+	case OperationSet:
+		return "set"
+	case OperationDelete:
+		return "delete"
+	default:
+		return "unknown"
+	}
+}
+
+// LogEntry represents a log message emitted during execution
+type LogEntry struct {
+	Level     LogLevel `json:"level"`
+	Message   string   `json:"message"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// LogLevel represents the severity level of a log entry
+type LogLevel uint8
+
+const (
+	LogLevelDebug LogLevel = iota
+	LogLevelInfo
+	LogLevelWarn
+	LogLevelError
+)
+
+// String returns the string representation of a log level
+func (level LogLevel) String() string {
+	switch level {
+	case LogLevelDebug:
+		return "debug"
+	case LogLevelInfo:
+		return "info"
+	case LogLevelWarn:
+		return "warn"
+	case LogLevelError:
+		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+// NewReceipt creates a new execution receipt
+func NewReceipt() *Receipt {
+	return &Receipt{
+		Timestamp:     time.Now(),
+		StateChanges:  make([]StateChange, 0),
+		Logs:          make([]LogEntry, 0),
+		Parameters:    make([][]byte, 0),
+	}
+}
+
+// AddStateChange adds a state change to the receipt
+func (r *Receipt) AddStateChange(op Operation, key, oldValue, newValue []byte) {
+	change := StateChange{
+		Operation: op,
+		Key:       make([]byte, len(key)),
+		OldValue:  make([]byte, len(oldValue)),
+		NewValue:  make([]byte, len(newValue)),
+	}
+
+	copy(change.Key, key)
+	copy(change.OldValue, oldValue)
+	copy(change.NewValue, newValue)
+
+	r.StateChanges = append(r.StateChanges, change)
+}
+
+// AddLog adds a log entry to the receipt
+func (r *Receipt) AddLog(level LogLevel, message string) {
+	log := LogEntry{
+		Level:     level,
+		Message:   message,
+		Timestamp: time.Now(),
+	}
+
+	r.Logs = append(r.Logs, log)
+}
+
+// SetError sets error information in the receipt
+func (r *Receipt) SetError(err error, code uint32) {
+	r.Success = false
+	if err != nil {
+		r.Error = err.Error()
+	}
+	r.ErrorCode = code
+}
+
+// GetGasEfficiency returns the gas efficiency ratio (0-1)
+func (r *Receipt) GetGasEfficiency() float64 {
+	if r.GasLimit == 0 {
+		return 0
+	}
+	return float64(r.GasUsed) / float64(r.GasLimit)
+}
+
+// GetMemoryEfficiency returns the memory efficiency ratio (0-1)
+func (r *Receipt) GetMemoryEfficiency() float64 {
+	if r.MemoryLimit == 0 {
+		return 0
+	}
+	return float64(r.MemoryUsed) / float64(r.MemoryLimit)
+}
+
+// ToJSON converts the receipt to JSON
+func (r *Receipt) ToJSON() ([]byte, error) {
+	return json.Marshal(r)
+}
+
+// FromJSON creates a receipt from JSON data
+func FromJSON(data []byte) (*Receipt, error) {
+	var receipt Receipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		return nil, err
+	}
+	return &receipt, nil
+}
+
+// Clone creates a deep copy of the receipt
+func (r *Receipt) Clone() *Receipt {
+	clone := &Receipt{
+		Success:       r.Success,
+		Timestamp:     r.Timestamp,
+		BlockHeight:   r.BlockHeight,
+		FunctionName:  r.FunctionName,
+		GasUsed:       r.GasUsed,
+		GasLimit:      r.GasLimit,
+		GasPrice:      r.GasPrice,
+		MemoryUsed:    r.MemoryUsed,
+		MemoryLimit:   r.MemoryLimit,
+		ExecutionTime: r.ExecutionTime,
+		Error:         r.Error,
+		ErrorCode:     r.ErrorCode,
+	}
+
+	// Deep copy slices
+	if r.TxHash != nil {
+		clone.TxHash = make([]byte, len(r.TxHash))
+		copy(clone.TxHash, r.TxHash)
+	}
+
+	if r.ReturnValue != nil {
+		clone.ReturnValue = make([]byte, len(r.ReturnValue))
+		copy(clone.ReturnValue, r.ReturnValue)
+	}
+
+	// Deep copy parameters
+	clone.Parameters = make([][]byte, len(r.Parameters))
+	for i, param := range r.Parameters {
+		clone.Parameters[i] = make([]byte, len(param))
+		copy(clone.Parameters[i], param)
+	}
+
+	// Deep copy state changes
+	clone.StateChanges = make([]StateChange, len(r.StateChanges))
+	copy(clone.StateChanges, r.StateChanges)
+
+	// Deep copy logs
+	clone.Logs = make([]LogEntry, len(r.Logs))
+	copy(clone.Logs, r.Logs)
+
+	return clone
+}
