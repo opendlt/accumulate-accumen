@@ -14,36 +14,70 @@ Accumen is a high-performance L1 sequencer with WASM runtime capabilities and VD
 ### Prerequisites
 
 - Go 1.22 or later
-- Make (for build automation)
+- PowerShell (Windows) or Bash (POSIX)
+- Port 8666 available for RPC server
 
-### Bootstrap Development Environment
+### End-to-End Smoke Test
 
-**Unix/Linux/macOS:**
+Run the complete smoke test that exercises the full stack from WASM contract deployment through L0 metadata writing:
+
 ```bash
-chmod +x ops/bootstrap.sh
-./ops/bootstrap.sh
+# Run smoke test with embedded Accumulate simulator
+go test ./tests/e2e -run TestAccumenSmoke -v
 ```
 
-**Windows (PowerShell):**
+### Manual Development Workflow
+
+#### Windows:
 ```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-./ops/bootstrap.ps1
+# 1. Start Accumen sequencer
+powershell -ExecutionPolicy Bypass -File ops/run-accumen.ps1
+
+# 2. Build CLI tool (in another terminal)
+go build -o bin/accucli ./cmd/accucli
+
+# 3. Check status
+./bin/accucli status --rpc=http://127.0.0.1:8666
+
+# 4. Submit transactions
+./bin/accucli submit --contract=acc://counter.acme --entry=increment --arg=amount:1
+
+# 5. Query state
+./bin/accucli query --contract=acc://counter.acme --key=value
 ```
 
-### Build and Run
+#### POSIX (Linux/macOS):
+```bash
+# 1. Start Accumen sequencer
+go run ./cmd/accumen --role=sequencer --config=./config/local.yaml --rpc=:8666
+
+# 2. Build CLI tool (in another terminal)
+go build -o bin/accucli ./cmd/accucli
+
+# 3. Check status
+./bin/accucli status --rpc=http://127.0.0.1:8666
+
+# 4. Submit transactions
+./bin/accucli submit --contract=acc://counter.acme --entry=increment --arg=amount:1
+
+# 5. Query state
+./bin/accucli query --contract=acc://counter.acme --key=value
+```
+
+### Build and Test
 
 ```bash
 # Build the binary
-make build
+make build  # or: go build -o bin/accumen ./cmd/accumen
 
-# Run as sequencer
-make run-sequencer
+# Run unit tests
+go test ./...
 
-# Run as follower
-./bin/accumen --role=follower --config=./config/example.json
+# Run integration tests
+go test ./tests/harness/...
 
-# Run tests
-make test
+# Run end-to-end tests
+go test ./tests/e2e/...
 ```
 
 ### Configuration

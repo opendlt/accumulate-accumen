@@ -2,6 +2,225 @@
 
 This runbook provides operational procedures for running, monitoring, and troubleshooting Accumen in production environments.
 
+## End-to-End Smoke Test (Manual)
+
+This section describes how to manually run the complete end-to-end smoke test that exercises the full Accumen stack from WASM contract deployment through L0 metadata writing.
+
+### 1. Start Accumulate Simulator
+
+The smoke test includes an embedded Accumulate simulator that provides the L0 network endpoints. Run the smoke test to start the simulator:
+
+```bash
+# Run the smoke test which includes the simulator
+go test ./tests/e2e -run TestAccumenSmoke -v
+```
+
+This will:
+- Start a mock Accumulate simulator (1 DN / 1 BVN)
+- Initialize registry and DN placeholder accounts
+- Deploy a counter WASM contract
+- Invoke increment operations 3 times
+- Verify metadata writes to DN
+- Assert all operations completed successfully
+
+**Expected Output:**
+```
+=== RUN   TestAccumenSmoke
+    accumen_e2e_test.go:20: 🚀 Starting Accumen E2E Smoke Test
+    integration.go:xxx: 🎯 Starting Accumen Smoke Test
+    integration.go:xxx: ✅ Simulator started on port 26660
+    integration.go:xxx: ✅ Sequencer started successfully
+    integration.go:xxx: ✅ Counter deployed at: acc://counter.acme
+    integration.go:xxx: ✅ Counter invoked 3 times
+    integration.go:xxx: ✅ All transactions processed
+    integration.go:xxx: ✅ Metadata written to DN (3 calls)
+    accumen_e2e_test.go:22: ✅ Accumen E2E Smoke Test completed successfully
+--- PASS: TestAccumenSmoke (5.23s)
+```
+
+### 2. Run Accumen L1 (Manual Mode)
+
+For manual testing and development, start the Accumen sequencer separately:
+
+#### Windows:
+```powershell
+# Start the sequencer with local configuration
+powershell -ExecutionPolicy Bypass -File ops/run-accumen.ps1
+```
+
+#### POSIX (Linux/macOS):
+```bash
+# Start the sequencer directly
+go run ./cmd/accumen --role=sequencer --config=./config/local.yaml --rpc=:8666
+```
+
+**Expected Output:**
+```
+🚀 Starting Accumen Node...
+   Role: sequencer
+   Config: config/local.yaml
+   RPC: :8666
+   Log Level: info
+
+✅ Go detected: go1.22.0
+📋 Configuration Summary:
+   Config file: config/local.yaml
+
+🔧 Build and run command:
+   go run ./cmd/accumen --role=sequencer --config=config/local.yaml --rpc=:8666 --log-level=info
+
+▶️  Starting Accumen...
+
+INFO[2024-01-15T10:30:00Z] Starting Accumen sequencer
+INFO[2024-01-15T10:30:00Z] RPC server listening on :8666
+INFO[2024-01-15T10:30:00Z] Sequencer running with 1s block time
+```
+
+### 3. Use accucli to Submit Increment
+
+Once the sequencer is running, use the CLI tool to interact with it:
+
+#### Build and Install CLI:
+```bash
+# Build the CLI tool
+go build -o bin/accucli ./cmd/accucli
+
+# Or run directly
+go run ./cmd/accucli --help
+```
+
+#### Check Sequencer Status:
+```bash
+# Check if sequencer is running
+./bin/accucli status --rpc=http://127.0.0.1:8666
+```
+
+**Expected Output:**
+```
+Chain ID: accumen-local
+Height: 15
+Running: true
+Last Anchor: 2024-01-15T10:35:00Z
+```
+
+#### Deploy Counter Contract:
+First, you need a deployed counter contract. The smoke test deploys one automatically, but for manual testing:
+
+```bash
+# Submit a deploy transaction (example)
+./bin/accucli submit \
+  --rpc=http://127.0.0.1:8666 \
+  --contract=acc://registry.acme \
+  --entry=deploy \
+  --arg=name:counter \
+  --arg=code:./examples/counter.wasm
+```
+
+#### Invoke Counter Increment:
+```bash
+# Submit increment transaction to deployed counter
+./bin/accucli submit \
+  --rpc=http://127.0.0.1:8666 \
+  --contract=acc://counter.acme \
+  --entry=increment \
+  --arg=amount:1
+```
+
+**Expected Output:**
+```
+Transaction Hash: 0x1234567890abcdef...
+Status: pending
+Block Height: 16
+```
+
+#### Query Counter State:
+```bash
+# Check the current counter value
+./bin/accucli query \
+  --rpc=http://127.0.0.1:8666 \
+  --contract=acc://counter.acme \
+  --key=value
+```
+
+**Expected Output:**
+```
+Contract: acc://counter.acme
+Key: value
+Exists: true
+Value: 3
+Type: uint64
+```
+
+### 4. Where to See Metadata on DN
+
+Accumen writes L1 transaction metadata to the Accumulate L0 network via WriteData operations. The metadata locations are configured in `config/local.yaml`:
+
+#### Configuration:
+```yaml
+# L0 Directory Network paths for metadata storage
+dnPaths:
+  metadata: "acc://accumen-metadata.acme"
+  anchors: "acc://accumen-anchors.acme"
+```
+
+#### Metadata Structure:
+Each L1 transaction generates metadata written to the DN with the following URL pattern:
+```
+acc://accumen-metadata.acme/YYYY/MM/DD/block-{height}-tx-{index}-{random}.json
+```
+
+Example metadata URLs:
+- `acc://accumen-metadata.acme/2024/01/15/block-16-tx-0-a1b2c3d4.json`
+- `acc://accumen-metadata.acme/2024/01/15/block-16-tx-1-e5f6g7h8.json`
+
+#### Metadata Content:
+```json
+{
+  "version": "1.0",
+  "chainId": "accumen-local",
+  "blockHeight": 16,
+  "blockTime": "2024-01-15T10:35:15Z",
+  "txIndex": 0,
+  "txHash": "0x1234567890abcdef...",
+  "contract": "acc://counter.acme",
+  "entry": "increment",
+  "args": {"amount": "1"},
+  "events": [
+    {"type": "counter.incremented", "data": {"old": 2, "new": 3}}
+  ],
+  "stagedOps": [],
+  "gasUsed": 1000,
+  "signature": "0xabcdef1234567890..."
+}
+```
+
+#### Viewing Metadata:
+To view the metadata written to the DN:
+
+1. **Via Accumulate CLI** (if available):
+   ```bash
+   accumulate account get acc://accumen-metadata.acme/2024/01/15/block-16-tx-0-a1b2c3d4.json
+   ```
+
+2. **Via L0 API** (direct query):
+   ```bash
+   curl -X POST http://localhost:26660/v3 \
+     -H "Content-Type: application/json" \
+     -d '{
+       "id": 1,
+       "method": "query",
+       "params": {
+         "url": "acc://accumen-metadata.acme/2024/01/15/block-16-tx-0-a1b2c3d4.json"
+       }
+     }'
+   ```
+
+3. **In Test Output**: The smoke test logs DN writer calls:
+   ```
+   INFO[2024-01-15T10:35:15Z] Writing metadata to DN                       url=acc://accumen-metadata.acme/2024/01/15/block-16-tx-0-a1b2c3d4.json
+   INFO[2024-01-15T10:35:15Z] Metadata written successfully               calls=3 total_bytes=2048
+   ```
+
 ## Quick Start
 
 ### Local Development
