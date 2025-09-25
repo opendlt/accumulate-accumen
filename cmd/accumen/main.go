@@ -29,6 +29,7 @@ var (
 	configPath = flag.String("config", "", "Path to configuration file")
 	logLevel   = flag.String("log-level", "info", "Log level: debug, info, warn, error")
 	rpcAddr    = flag.String("rpc", ":8666", "RPC server address (default :8666)")
+	metricsAddr = flag.String("metrics", ":8667", "Metrics server address (default :8667)")
 )
 
 func main() {
@@ -57,8 +58,15 @@ func main() {
 		logz.Fatal("Failed to load config: %v", err)
 	}
 
+	// Initialize metrics
+	metrics.SetNodeMode(*role)
+	logz.Info("Metrics initialized for %s mode", *role)
+
 	logz.Info("Starting Accumen node in %s mode with config: %s", *role, *configPath)
 	logz.Debug("Configuration: %s", cfg.String())
+
+	// Start metrics server
+	go startMetricsServer(*metricsAddr)
 
 	// Create API v3 client
 	apiClient, err := v3.New(cfg.APIV3Endpoints[0]) // Use first endpoint for now
@@ -96,6 +104,56 @@ func main() {
 	}
 
 	logz.Info("Accumen node shutdown complete")
+}
+
+// startMetricsServer starts the metrics and health check server
+func startMetricsServer(addr string) {
+	mux := http.NewServeMux()
+
+	// Mount observability endpoints
+	mux.Handle("/debug/vars", metrics.Handler())
+	mux.HandleFunc("/healthz", health.SimpleHandler())
+	mux.HandleFunc("/health/ready", health.ReadinessHandler())
+	mux.HandleFunc("/health/live", health.LivenessHandler())
+	mux.HandleFunc("/health/detailed", health.DetailedStatusHandler())
+
+	server := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	logz.Info("Starting metrics server on %s", addr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logz.Info("Metrics server error: %v", err)
+	}
+}
+
+// recordSequencerMetrics periodically records sequencer metrics
+func recordSequencerMetrics(ctx context.Context, seq *sequencer.Sequencer, logger *logz.Logger) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if seq.IsRunning() {
+				stats := seq.GetStats()
+				lastAnchorHeight := seq.GetLastAnchorHeight()
+
+				// Record sequencer metrics
+				metrics.RecordSequencerStats(stats.BlockHeight, stats.TxsProcessed, lastAnchorHeight)
+
+				// Update individual metrics
+				metrics.SetCurrentHeight(stats.BlockHeight)
+				if lastAnchorHeight > 0 {
+					estimatedTime := time.Now().Add(-time.Duration(stats.BlockHeight-lastAnchorHeight) * 5 * time.Second)
+					metrics.SetLastAnchorTime(estimatedTime)
+				}
+			}
+		}
+	}
 }
 
 // runSequencer runs the node in sequencer mode
@@ -164,6 +222,9 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 	logger.Info("DN paths - Anchors: %s, TxMeta: %s", cfg.DNPaths.Anchors, cfg.DNPaths.TxMeta)
 	logger.Info("Storage: backend=%s, path=%s", cfg.Storage.Backend, cfg.Storage.Path)
 	logger.Info("Confirmation settings: waitForExecution=%v, timeout=%s", cfg.Confirm.WaitForExecution, cfg.Confirm.Timeout)
+
+	// Start periodic metrics recording
+	go recordSequencerMetrics(ctx, seq, logger)
 
 	// TODO: When bridge is enabled, DN writer and submitter would be configured with confirmation support:
 	// if seqConfig.Bridge.EnableBridge {

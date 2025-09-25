@@ -942,6 +942,53 @@ cp bin/accumen.backup bin/accumen
 
 ## Appendix
 
+### Observability Endpoints
+
+#### Health Check Endpoints
+
+The Accumen nodes expose several health check endpoints for monitoring:
+
+- **`/healthz`** - Basic health status returning JSON with `ok`, `height`, `last_anchor_time`
+- **`/health/ready`** - Readiness check (returns 503 if not ready to serve traffic)
+- **`/health/live`** - Liveness check (simple alive confirmation)
+- **`/health/detailed`** - Detailed status with full metrics snapshot
+
+#### Metrics Endpoints
+
+- **`/debug/vars`** - Expvar metrics in JSON format including:
+  - `blocks_produced` - Total blocks produced by sequencer
+  - `txs_executed` - Total transactions executed
+  - `l0_submitted` - Successful L0 submissions to Accumulate network
+  - `l0_failed` - Failed L0 submissions
+  - `anchors_written` - Anchors written to DN
+  - `wasm_gas_used_total` - Total WASM gas consumed
+  - `current_height` - Current block height
+  - `follower_height` - Follower sync height
+  - `indexer_entries_processed` - Entries processed by follower indexer
+
+#### Default Ports
+
+- **Sequencer**: Metrics server runs on `:8667` by default
+- **Follower**: Metrics server runs on `:8668` by default
+
+#### Usage Examples
+
+```bash
+# Check sequencer health
+curl http://localhost:8667/healthz
+
+# Get detailed metrics
+curl http://localhost:8667/debug/vars
+
+# Check follower readiness
+curl http://localhost:8668/health/ready
+```
+
+For production monitoring, configure your monitoring system to:
+1. Poll `/healthz` for basic health status
+2. Scrape `/debug/vars` for detailed metrics
+3. Use `/health/ready` for load balancer health checks
+
 ### Useful Commands
 ```bash
 # Process management

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,16 +13,19 @@ import (
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/follower/indexer"
 	"github.com/opendlt/accumulate-accumen/internal/config"
+	"github.com/opendlt/accumulate-accumen/internal/health"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
+	"github.com/opendlt/accumulate-accumen/internal/metrics"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 )
 
 var (
-	configPath = flag.String("config", "", "Path to configuration file")
-	rpcAddr    = flag.String("rpc", ":8667", "RPC server address (default :8667)")
-	logLevel   = flag.String("log-level", "info", "Log level: debug, info, warn, error")
+	configPath  = flag.String("config", "", "Path to configuration file")
+	rpcAddr     = flag.String("rpc", ":8667", "RPC server address (default :8667)")
+	logLevel    = flag.String("log-level", "info", "Log level: debug, info, warn, error")
+	metricsAddr = flag.String("metrics", ":8668", "Metrics server address (default :8668)")
 )
 
 func main() {
@@ -46,8 +50,15 @@ func main() {
 		logz.Fatal("Failed to load config: %v", err)
 	}
 
+	// Initialize metrics
+	metrics.SetNodeMode("follower")
+	logz.Info("Metrics initialized for follower mode")
+
 	logz.Info("Starting Accumen follower with config: %s", *configPath)
 	logz.Debug("Configuration: %s", cfg.String())
+
+	// Start metrics server
+	go startMetricsServer(*metricsAddr)
 
 	// Create API v3 client
 	apiClient, err := v3.New(cfg.APIV3Endpoints[0]) // Use first endpoint for now
@@ -143,6 +154,9 @@ func runFollower(ctx context.Context, cfg *config.Config, apiClient *v3.Client) 
 	}()
 
 	logger.Info("Indexer started, scanning metadata path: %s", cfg.DNPaths.TxMeta)
+
+	// Start periodic metrics recording
+	go recordFollowerMetrics(ctx, idx, logger)
 
 	// Start RPC server in read-only mode
 	var rpcServer *rpc.Server
@@ -260,4 +274,49 @@ func HealthCheck(idx *indexer.Indexer, kvStore state.KVStore) error {
 	kvStore.Delete(testKey)
 
 	return nil
+}
+
+// startMetricsServer starts the metrics and health check server
+func startMetricsServer(addr string) {
+	mux := http.NewServeMux()
+
+	// Mount observability endpoints
+	mux.Handle("/debug/vars", metrics.Handler())
+	mux.HandleFunc("/healthz", health.SimpleHandler())
+	mux.HandleFunc("/health/ready", health.ReadinessHandler())
+	mux.HandleFunc("/health/live", health.LivenessHandler())
+	mux.HandleFunc("/health/detailed", health.DetailedStatusHandler())
+
+	server := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	logz.Info("Starting follower metrics server on %s", addr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logz.Info("Follower metrics server error: %v", err)
+	}
+}
+
+// recordFollowerMetrics periodically records follower metrics
+func recordFollowerMetrics(ctx context.Context, idx *indexer.Indexer, logger *logz.Logger) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			stats := idx.GetStats()
+			if stats.Running {
+				// Record follower metrics
+				metrics.RecordFollowerStats(stats.CurrentHeight, stats.EntriesProcessed)
+
+				// Update individual metrics
+				metrics.SetFollowerHeight(stats.CurrentHeight)
+				metrics.SetIndexerEntries(stats.EntriesProcessed)
+			}
+		}
+	}
 }
