@@ -1,0 +1,234 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.accumen.network/tx-metadata.schema.json",
+  "title": "Accumen Transaction Metadata",
+  "description": "Schema for Accumen transaction metadata including execution context and bridge information",
+  "type": "object",
+  "required": [
+    "txId",
+    "blockHeight",
+    "timestamp",
+    "gasUsed",
+    "gasLimit"
+  ],
+  "properties": {
+    "txId": {
+      "type": "string",
+      "description": "Unique transaction identifier",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "blockHeight": {
+      "type": "integer",
+      "description": "Block height where transaction was included",
+      "minimum": 0
+    },
+    "blockIndex": {
+      "type": "integer",
+      "description": "Transaction index within the block",
+      "minimum": 0
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp when transaction was executed (RFC3339)"
+    },
+    "sequencerId": {
+      "type": "string",
+      "description": "Identifier of the sequencer that processed the transaction",
+      "maxLength": 64
+    },
+    "executionContext": {
+      "type": "object",
+      "description": "WASM execution context information",
+      "properties": {
+        "gasUsed": {
+          "type": "integer",
+          "description": "Amount of gas consumed during execution",
+          "minimum": 0
+        },
+        "gasLimit": {
+          "type": "integer",
+          "description": "Maximum gas allowed for execution",
+          "minimum": 0
+        },
+        "gasPrice": {
+          "type": "integer",
+          "description": "Gas price in credits per unit",
+          "minimum": 0
+        },
+        "executionTime": {
+          "type": "number",
+          "description": "Execution time in milliseconds",
+          "minimum": 0
+        },
+        "wasmModule": {
+          "type": "string",
+          "description": "WASM module identifier or hash",
+          "maxLength": 128
+        },
+        "functionName": {
+          "type": "string",
+          "description": "WASM function that was executed",
+          "maxLength": 64
+        },
+        "memoryUsed": {
+          "type": "integer",
+          "description": "Peak memory usage in bytes",
+          "minimum": 0
+        }
+      },
+      "required": ["gasUsed", "gasLimit", "executionTime"]
+    },
+    "bridgeInfo": {
+      "type": "object",
+      "description": "L0 bridge submission information",
+      "properties": {
+        "l0TxHash": {
+          "type": "string",
+          "description": "Accumulate L0 transaction hash",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        },
+        "l0BlockHeight": {
+          "type": "integer",
+          "description": "L0 block height where transaction was anchored",
+          "minimum": 0
+        },
+        "submissionTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When transaction was submitted to L0"
+        },
+        "confirmationTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When transaction was confirmed on L0"
+        },
+        "bridgeCost": {
+          "type": "integer",
+          "description": "Cost in credits to bridge to L0",
+          "minimum": 0
+        },
+        "retryCount": {
+          "type": "integer",
+          "description": "Number of submission retry attempts",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "stateChanges": {
+      "type": "array",
+      "description": "State changes made by this transaction",
+      "items": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": ["set", "delete"],
+            "description": "Type of state operation"
+          },
+          "key": {
+            "type": "string",
+            "description": "State key (base64 encoded)",
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          },
+          "oldValue": {
+            "type": "string",
+            "description": "Previous value (base64 encoded, if any)",
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          },
+          "newValue": {
+            "type": "string",
+            "description": "New value (base64 encoded, for set operations)",
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          }
+        },
+        "required": ["operation", "key"]
+      }
+    },
+    "logs": {
+      "type": "array",
+      "description": "Log entries emitted during execution",
+      "items": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": ["debug", "info", "warn", "error"],
+            "description": "Log level"
+          },
+          "message": {
+            "type": "string",
+            "description": "Log message",
+            "maxLength": 1024
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When log entry was created"
+          },
+          "source": {
+            "type": "string",
+            "description": "Source of the log entry (e.g., function name)",
+            "maxLength": 128
+          }
+        },
+        "required": ["level", "message", "timestamp"]
+      }
+    },
+    "signature": {
+      "type": "object",
+      "description": "Transaction signature information",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["ed25519", "secp256k1", "rsa"],
+          "description": "Signature algorithm used"
+        },
+        "publicKey": {
+          "type": "string",
+          "description": "Signer's public key (base64 encoded)",
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+        },
+        "signature": {
+          "type": "string",
+          "description": "Transaction signature (base64 encoded)",
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+        },
+        "keyHash": {
+          "type": "string",
+          "description": "Hash of the public key for verification",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        }
+      },
+      "required": ["algorithm", "publicKey", "signature"]
+    },
+    "priority": {
+      "type": "integer",
+      "description": "Transaction priority score used for ordering",
+      "minimum": 0
+    },
+    "nonce": {
+      "type": "integer",
+      "description": "Transaction nonce for replay protection",
+      "minimum": 0
+    },
+    "size": {
+      "type": "integer",
+      "description": "Transaction size in bytes",
+      "minimum": 0
+    },
+    "version": {
+      "type": "string",
+      "description": "Metadata schema version",
+      "pattern": "^v\\d+\\.\\d+\\.\\d+$",
+      "default": "v1.0.0"
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Extension fields for future use",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}
