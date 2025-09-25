@@ -2,10 +2,12 @@ package outputs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 )
 
@@ -362,4 +364,245 @@ func (s *Scope) Cleanup() error {
 	s.updated = time.Now()
 
 	return nil
+}
+
+// AuthorityScope defines what L0 operations a contract is authorized to perform
+type AuthorityScope struct {
+	Version   int                 `json:"version"`
+	Contract  string              `json:"contract"`  // Contract URL
+	Paused    bool                `json:"paused"`    // If true, no operations allowed
+	Allowed   AllowedOperations   `json:"allowed"`   // Allowed operation types and targets
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
+	ExpiresAt *time.Time          `json:"expires_at,omitempty"`
+}
+
+// AllowedOperations defines which L0 operations are permitted
+type AllowedOperations struct {
+	WriteData  []WriteDataPermission  `json:"write_data"`   // WriteData permissions
+	SendTokens []SendTokensPermission `json:"send_tokens"`  // Token transfer permissions
+	UpdateAuth []UpdateAuthPermission `json:"update_auth"`  // Authority update permissions
+}
+
+// WriteDataPermission defines permissions for WriteData operations
+type WriteDataPermission struct {
+	Target      string `json:"target"`       // Target account URL pattern (e.g., "acc://data.acme/*")
+	MaxSize     uint64 `json:"max_size"`     // Maximum data size in bytes
+	MaxPerBlock uint64 `json:"max_per_block"` // Maximum operations per block
+	ContentType string `json:"content_type,omitempty"` // Allowed content type pattern
+}
+
+// SendTokensPermission defines permissions for token transfers
+type SendTokensPermission struct {
+	From        string `json:"from"`         // Source account URL pattern
+	To          string `json:"to"`           // Destination account URL pattern
+	TokenURL    string `json:"token_url"`    // Token type URL
+	MaxAmount   uint64 `json:"max_amount"`   // Maximum amount per operation
+	MaxPerBlock uint64 `json:"max_per_block"` // Maximum operations per block
+}
+
+// UpdateAuthPermission defines permissions for authority updates
+type UpdateAuthPermission struct {
+	Target      string `json:"target"`       // Target account URL pattern
+	Operations  []string `json:"operations"`  // Allowed operations (add_authority, remove_authority, etc.)
+	MaxPerBlock uint64 `json:"max_per_block"` // Maximum operations per block
+}
+
+// DefaultAuthorityScope returns a restrictive default scope
+func DefaultAuthorityScope(contractURL string) *AuthorityScope {
+	return &AuthorityScope{
+		Version:   1,
+		Contract:  contractURL,
+		Paused:    false,
+		Allowed:   AllowedOperations{}, // No operations allowed by default
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+}
+
+// FetchFromDN fetches an AuthorityScope document from the DN registry
+func FetchFromDN(ctx context.Context, client *v3.Client, contractURL string) (*AuthorityScope, error) {
+	if client == nil {
+		return nil, fmt.Errorf("DN client is nil")
+	}
+
+	if contractURL == "" {
+		return nil, fmt.Errorf("contract URL cannot be empty")
+	}
+
+	// Construct DN registry URL for authority scope
+	// Format: acc://dn.acme/registry/authority-scopes/{contract-hash}
+	contractHash := hashContractURL(contractURL)
+	scopeURL := fmt.Sprintf("acc://dn.acme/registry/authority-scopes/%s", contractHash)
+
+	// Query the DN for the authority scope
+	resp, err := client.Query(ctx, scopeURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query authority scope from DN: %w", err)
+	}
+
+	// Check if the scope exists
+	if resp.Type == "unknown" {
+		// Return default restrictive scope if not found
+		return DefaultAuthorityScope(contractURL), nil
+	}
+
+	// Parse the scope data
+	var scope AuthorityScope
+	if err := json.Unmarshal(resp.Data, &scope); err != nil {
+		return nil, fmt.Errorf("failed to parse authority scope JSON: %w", err)
+	}
+
+	// Validate the scope
+	if err := validateAuthorityScope(&scope, contractURL); err != nil {
+		return nil, fmt.Errorf("invalid authority scope: %w", err)
+	}
+
+	// Check expiration
+	if scope.ExpiresAt != nil && time.Now().UTC().After(*scope.ExpiresAt) {
+		return DefaultAuthorityScope(contractURL), nil
+	}
+
+	return &scope, nil
+}
+
+// validateAuthorityScope performs basic validation on an authority scope
+func validateAuthorityScope(scope *AuthorityScope, expectedContract string) error {
+	if scope.Contract != expectedContract {
+		return fmt.Errorf("scope contract mismatch: expected %s, got %s", expectedContract, scope.Contract)
+	}
+
+	if scope.Version < 1 {
+		return fmt.Errorf("invalid scope version: %d", scope.Version)
+	}
+
+	// Validate WriteData permissions
+	for i, perm := range scope.Allowed.WriteData {
+		if perm.Target == "" {
+			return fmt.Errorf("WriteData permission %d: target cannot be empty", i)
+		}
+		if perm.MaxSize == 0 {
+			return fmt.Errorf("WriteData permission %d: max_size must be positive", i)
+		}
+	}
+
+	// Validate SendTokens permissions
+	for i, perm := range scope.Allowed.SendTokens {
+		if perm.From == "" || perm.To == "" {
+			return fmt.Errorf("SendTokens permission %d: from and to cannot be empty", i)
+		}
+		if perm.TokenURL == "" {
+			return fmt.Errorf("SendTokens permission %d: token_url cannot be empty", i)
+		}
+		if perm.MaxAmount == 0 {
+			return fmt.Errorf("SendTokens permission %d: max_amount must be positive", i)
+		}
+	}
+
+	// Validate UpdateAuth permissions
+	for i, perm := range scope.Allowed.UpdateAuth {
+		if perm.Target == "" {
+			return fmt.Errorf("UpdateAuth permission %d: target cannot be empty", i)
+		}
+		if len(perm.Operations) == 0 {
+			return fmt.Errorf("UpdateAuth permission %d: operations cannot be empty", i)
+		}
+	}
+
+	return nil
+}
+
+// hashContractURL creates a deterministic hash for a contract URL
+func hashContractURL(contractURL string) string {
+	// Simple hash based on contract URL
+	// In production, would use proper cryptographic hash
+	hash := 0
+	for _, c := range contractURL {
+		hash = hash*31 + int(c)
+	}
+	return fmt.Sprintf("%08x", uint32(hash))
+}
+
+// IsAllowed checks if the scope is active (not paused and not expired)
+func (scope *AuthorityScope) IsAllowed() bool {
+	if scope.Paused {
+		return false
+	}
+
+	if scope.ExpiresAt != nil && time.Now().UTC().After(*scope.ExpiresAt) {
+		return false
+	}
+
+	return true
+}
+
+// HasWriteDataPermission checks if WriteData operation is allowed for a target
+func (scope *AuthorityScope) HasWriteDataPermission(target string, size uint64) *WriteDataPermission {
+	if !scope.IsAllowed() {
+		return nil
+	}
+
+	for _, perm := range scope.Allowed.WriteData {
+		if matchesPattern(target, perm.Target) && size <= perm.MaxSize {
+			return &perm
+		}
+	}
+
+	return nil
+}
+
+// HasSendTokensPermission checks if SendTokens operation is allowed
+func (scope *AuthorityScope) HasSendTokensPermission(from, to, tokenURL string, amount uint64) *SendTokensPermission {
+	if !scope.IsAllowed() {
+		return nil
+	}
+
+	for _, perm := range scope.Allowed.SendTokens {
+		if matchesPattern(from, perm.From) &&
+		   matchesPattern(to, perm.To) &&
+		   matchesPattern(tokenURL, perm.TokenURL) &&
+		   amount <= perm.MaxAmount {
+			return &perm
+		}
+	}
+
+	return nil
+}
+
+// HasUpdateAuthPermission checks if UpdateAuth operation is allowed
+func (scope *AuthorityScope) HasUpdateAuthPermission(target, operation string) *UpdateAuthPermission {
+	if !scope.IsAllowed() {
+		return nil
+	}
+
+	for _, perm := range scope.Allowed.UpdateAuth {
+		if matchesPattern(target, perm.Target) {
+			for _, allowedOp := range perm.Operations {
+				if operation == allowedOp {
+					return &perm
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// matchesPattern performs simple pattern matching with wildcard support
+func matchesPattern(value, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+
+	if pattern == value {
+		return true
+	}
+
+	// Simple prefix matching with *
+	if len(pattern) > 0 && pattern[len(pattern)-1] == '*' {
+		prefix := pattern[:len(pattern)-1]
+		return len(value) >= len(prefix) && value[:len(prefix)] == prefix
+	}
+
+	return false
 }

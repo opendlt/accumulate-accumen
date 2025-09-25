@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
@@ -46,6 +47,54 @@ type ExecResult struct {
 	Events        []*runtime.Event    `json:"events"`
 }
 
+// ScopeCache caches authority scopes for contracts
+type ScopeCache struct {
+	mu     sync.RWMutex
+	cache  map[string]*scopeCacheEntry
+	ttl    time.Duration
+}
+
+type scopeCacheEntry struct {
+	scope     *outputs.AuthorityScope
+	fetchedAt time.Time
+}
+
+// NewScopeCache creates a new scope cache with the specified TTL
+func NewScopeCache(ttl time.Duration) *ScopeCache {
+	return &ScopeCache{
+		cache: make(map[string]*scopeCacheEntry),
+		ttl:   ttl,
+	}
+}
+
+// Get retrieves a cached scope or fetches a new one
+func (sc *ScopeCache) Get(ctx context.Context, dnEndpoint, contractURL string) (*outputs.AuthorityScope, error) {
+	sc.mu.RLock()
+	if entry, exists := sc.cache[contractURL]; exists {
+		if time.Since(entry.fetchedAt) < sc.ttl {
+			sc.mu.RUnlock()
+			return entry.scope, nil
+		}
+	}
+	sc.mu.RUnlock()
+
+	// Cache miss or expired, fetch new scope
+	scope, err := outputs.FetchFromDN(ctx, dnEndpoint, contractURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch authority scope: %w", err)
+	}
+
+	// Update cache
+	sc.mu.Lock()
+	sc.cache[contractURL] = &scopeCacheEntry{
+		scope:     scope,
+		fetchedAt: time.Now(),
+	}
+	sc.mu.Unlock()
+
+	return scope, nil
+}
+
 // ExecutionEngine handles transaction execution for the sequencer
 type ExecutionEngine struct {
 	mu               sync.RWMutex
@@ -55,6 +104,11 @@ type ExecutionEngine struct {
 	contractStore    *contracts.Store
 	gasMeter         *gas.Meter
 	scheduleProvider *pricing.ScheduleProvider
+
+	// Authority scope management
+	scopeCache    *ScopeCache
+	limitTracker  *outputs.OperationLimitTracker
+	dnEndpoint    string
 
 	// State management
 	currentHeight uint64
@@ -85,7 +139,7 @@ type workItem struct {
 }
 
 // NewExecutionEngine creates a new execution engine
-func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider) (*ExecutionEngine, error) {
+func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider, dnEndpoint string) (*ExecutionEngine, error) {
 	// Create WASM runtime
 	wasmRuntime, err := runtime.NewRuntime(&config.Runtime)
 	if err != nil {
@@ -116,6 +170,9 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 		contractStore:    contractStore,
 		gasMeter:         gasMeter,
 		scheduleProvider: scheduleProvider,
+		scopeCache:       NewScopeCache(30 * time.Second), // Cache scopes for 30 seconds
+		limitTracker:     outputs.NewOperationLimitTracker(),
+		dnEndpoint:       dnEndpoint,
 		currentHeight:    0,
 		stateRoot:        make([]byte, 32), // Genesis state root
 		workQueue:        make(chan *workItem, config.WorkerCount*2),
@@ -216,6 +273,9 @@ func (e *ExecutionEngine) ExecuteTransactions(ctx context.Context, txs []*Transa
 	e.stateRoot = newStateRoot
 	e.totalExecuted += uint64(len(txs))
 	e.totalGasUsed += totalGasUsed
+
+	// Reset operation limit tracker for next block
+	e.limitTracker.Reset()
 
 	// Update average execution time
 	execTime := time.Since(startTime)
@@ -333,6 +393,26 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		result.Error = err.Error()
 		result.ExecutionTime = time.Since(startTime)
 		return result
+	}
+
+	// Verify staged operations against authority scope if there are any
+	if len(execResult.StagedOps) > 0 {
+		// Fetch authority scope for this contract
+		scope, err := e.scopeCache.Get(ctx, e.dnEndpoint, tx.To)
+		if err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("failed to fetch authority scope: %v", err)
+			result.ExecutionTime = time.Since(startTime)
+			return result
+		}
+
+		// Verify all staged operations
+		if err := outputs.VerifyAll(execResult.StagedOps, scope, e.limitTracker); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("authority verification failed: %v", err)
+			result.ExecutionTime = time.Since(startTime)
+			return result
+		}
 	}
 
 	// Process execution result

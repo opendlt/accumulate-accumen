@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/bridge/outputs/limits"
+	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 )
 
@@ -454,4 +457,255 @@ func (v *Verifier) Cleanup() error {
 	v.dependencies = make(map[string][]string)
 
 	return nil
+}
+
+// OperationLimitTracker tracks per-block operation limits
+type OperationLimitTracker struct {
+	counters map[string]*limits.Counter
+	mu       sync.RWMutex
+}
+
+// NewOperationLimitTracker creates a new operation limit tracker
+func NewOperationLimitTracker() *OperationLimitTracker {
+	return &OperationLimitTracker{
+		counters: make(map[string]*limits.Counter),
+	}
+}
+
+// GetCounter returns the counter for a specific contract and operation type
+func (t *OperationLimitTracker) GetCounter(contractURL, opType string) *limits.Counter {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	key := contractURL + ":" + opType
+	if counter, exists := t.counters[key]; exists {
+		return counter
+	}
+
+	counter := limits.NewCounter()
+	t.counters[key] = counter
+	return counter
+}
+
+// Reset clears all counters (called at block boundaries)
+func (t *OperationLimitTracker) Reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for _, counter := range t.counters {
+		counter.Reset()
+	}
+}
+
+// Verify checks if a single staged operation is permitted by the authority scope
+func Verify(op *runtime.StagedOp, scope *AuthorityScope, tracker *OperationLimitTracker) error {
+	if op == nil {
+		return fmt.Errorf("operation cannot be nil")
+	}
+
+	if scope == nil {
+		return fmt.Errorf("authority scope cannot be nil")
+	}
+
+	// Check if contract is paused
+	if scope.Paused {
+		return fmt.Errorf("contract operations are paused")
+	}
+
+	// Check if scope has expired
+	if scope.ExpiresAt != nil && time.Now().After(*scope.ExpiresAt) {
+		return fmt.Errorf("authority scope has expired")
+	}
+
+	// Determine operation type and verify permissions
+	switch op.Type {
+	case "WriteData":
+		return verifyWriteData(op, scope, tracker)
+	case "SendTokens":
+		return verifySendTokens(op, scope, tracker)
+	case "UpdateAuth":
+		return verifyUpdateAuth(op, scope, tracker)
+	default:
+		return fmt.Errorf("unknown operation type: %s", op.Type)
+	}
+}
+
+// VerifyAll checks if all staged operations are permitted by the authority scope
+func VerifyAll(staged []*runtime.StagedOp, scope *AuthorityScope, tracker *OperationLimitTracker) error {
+	if scope == nil {
+		return fmt.Errorf("authority scope cannot be nil")
+	}
+
+	if len(staged) == 0 {
+		return nil // No operations to verify
+	}
+
+	// Verify each operation
+	for i, op := range staged {
+		if err := Verify(op, scope, tracker); err != nil {
+			return fmt.Errorf("operation %d failed verification: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// verifyWriteData verifies WriteData operation permissions
+func verifyWriteData(op *runtime.StagedOp, scope *AuthorityScope, tracker *OperationLimitTracker) error {
+	permissions := scope.Allowed.WriteData
+	if len(permissions) == 0 {
+		return fmt.Errorf("WriteData operations not permitted")
+	}
+
+	// Extract key pattern from operation
+	keyPattern := ""
+	if key, exists := op.Args["key"]; exists {
+		if keyStr, ok := key.(string); ok {
+			keyPattern = keyStr
+		}
+	}
+
+	// Find matching permission
+	var matchedPerm *WriteDataPermission
+	for _, perm := range permissions {
+		if matchesPattern(keyPattern, perm.KeyPattern) {
+			matchedPerm = &perm
+			break
+		}
+	}
+
+	if matchedPerm == nil {
+		return fmt.Errorf("WriteData operation not permitted for key pattern: %s", keyPattern)
+	}
+
+	// Check rate limit if specified
+	if matchedPerm.MaxPerBlock > 0 {
+		counter := tracker.GetCounter(scope.Contract, "WriteData:"+matchedPerm.KeyPattern)
+		if counter.Count() >= matchedPerm.MaxPerBlock {
+			return fmt.Errorf("WriteData rate limit exceeded: %d per block for pattern %s",
+				matchedPerm.MaxPerBlock, matchedPerm.KeyPattern)
+		}
+		counter.Increment()
+	}
+
+	return nil
+}
+
+// verifySendTokens verifies SendTokens operation permissions
+func verifySendTokens(op *runtime.StagedOp, scope *AuthorityScope, tracker *OperationLimitTracker) error {
+	permissions := scope.Allowed.SendTokens
+	if len(permissions) == 0 {
+		return fmt.Errorf("SendTokens operations not permitted")
+	}
+
+	// Extract recipient and amount from operation
+	recipient := ""
+	var amount uint64
+
+	if recipientVal, exists := op.Args["recipient"]; exists {
+		if recipientStr, ok := recipientVal.(string); ok {
+			recipient = recipientStr
+		}
+	}
+
+	if amountVal, exists := op.Args["amount"]; exists {
+		if amountUint, ok := amountVal.(uint64); ok {
+			amount = amountUint
+		}
+	}
+
+	// Find matching permission
+	var matchedPerm *SendTokensPermission
+	for _, perm := range permissions {
+		if matchesPattern(recipient, perm.RecipientPattern) {
+			matchedPerm = &perm
+			break
+		}
+	}
+
+	if matchedPerm == nil {
+		return fmt.Errorf("SendTokens operation not permitted for recipient: %s", recipient)
+	}
+
+	// Check amount limit
+	if matchedPerm.MaxAmount > 0 && amount > matchedPerm.MaxAmount {
+		return fmt.Errorf("SendTokens amount %d exceeds limit %d", amount, matchedPerm.MaxAmount)
+	}
+
+	// Check rate limit if specified
+	if matchedPerm.MaxPerBlock > 0 {
+		counter := tracker.GetCounter(scope.Contract, "SendTokens:"+matchedPerm.RecipientPattern)
+		if counter.Count() >= matchedPerm.MaxPerBlock {
+			return fmt.Errorf("SendTokens rate limit exceeded: %d per block for pattern %s",
+				matchedPerm.MaxPerBlock, matchedPerm.RecipientPattern)
+		}
+		counter.Increment()
+	}
+
+	return nil
+}
+
+// verifyUpdateAuth verifies UpdateAuth operation permissions
+func verifyUpdateAuth(op *runtime.StagedOp, scope *AuthorityScope, tracker *OperationLimitTracker) error {
+	permissions := scope.Allowed.UpdateAuth
+	if len(permissions) == 0 {
+		return fmt.Errorf("UpdateAuth operations not permitted")
+	}
+
+	// Extract key pattern from operation
+	keyPattern := ""
+	if key, exists := op.Args["key"]; exists {
+		if keyStr, ok := key.(string); ok {
+			keyPattern = keyStr
+		}
+	}
+
+	// Find matching permission
+	var matchedPerm *UpdateAuthPermission
+	for _, perm := range permissions {
+		if matchesPattern(keyPattern, perm.KeyPattern) {
+			matchedPerm = &perm
+			break
+		}
+	}
+
+	if matchedPerm == nil {
+		return fmt.Errorf("UpdateAuth operation not permitted for key pattern: %s", keyPattern)
+	}
+
+	// Check rate limit if specified
+	if matchedPerm.MaxPerBlock > 0 {
+		counter := tracker.GetCounter(scope.Contract, "UpdateAuth:"+matchedPerm.KeyPattern)
+		if counter.Count() >= matchedPerm.MaxPerBlock {
+			return fmt.Errorf("UpdateAuth rate limit exceeded: %d per block for pattern %s",
+				matchedPerm.MaxPerBlock, matchedPerm.KeyPattern)
+		}
+		counter.Increment()
+	}
+
+	return nil
+}
+
+// matchesPattern checks if a value matches a pattern (supports wildcards)
+func matchesPattern(value, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+
+	if pattern == value {
+		return true
+	}
+
+	// Simple wildcard matching
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(value, prefix)
+	}
+
+	if strings.HasPrefix(pattern, "*") {
+		suffix := strings.TrimPrefix(pattern, "*")
+		return strings.HasSuffix(value, suffix)
+	}
+
+	return false
 }
