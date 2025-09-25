@@ -106,9 +106,12 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 		ListenAddr:      "127.0.0.1:8080",
 		BlockTime:       cfg.GetBlockTimeDuration(),
 		MaxTransactions: 100, // Default value
-		// Bridge configuration will be updated later
+		// Bridge configuration with confirmation support
 		Bridge: sequencer.BridgeConfig{
 			EnableBridge: false, // Disabled for now
+			// When enabled, DN writer would be configured with:
+			// WaitForExecution: cfg.Confirm.WaitForExecution
+			// ExecutionTimeout: cfg.GetConfirmTimeoutDuration()
 		},
 	}
 
@@ -157,6 +160,20 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 	logger.Info("Gas schedule ID: %s", cfg.GasScheduleID)
 	logger.Info("DN paths - Anchors: %s, TxMeta: %s", cfg.DNPaths.Anchors, cfg.DNPaths.TxMeta)
 	logger.Info("Storage: backend=%s, path=%s", cfg.Storage.Backend, cfg.Storage.Path)
+	logger.Info("Confirmation settings: waitForExecution=%v, timeout=%s", cfg.Confirm.WaitForExecution, cfg.Confirm.Timeout)
+
+	// TODO: When bridge is enabled, DN writer and submitter would be configured with confirmation support:
+	// if seqConfig.Bridge.EnableBridge {
+	//     dnWriterConfig := anchors.DefaultDNWriterConfig()
+	//     dnWriterConfig.SequencerKey = cfg.SequencerKey
+	//     dnWriterConfig.WaitForExecution = cfg.Confirm.WaitForExecution
+	//     dnWriterConfig.ExecutionTimeout = cfg.GetConfirmTimeoutDuration()
+	//     dnWriter, err := anchors.NewDNWriter(dnWriterConfig)
+	//     if err != nil {
+	//         return fmt.Errorf("failed to create DN writer: %w", err)
+	//     }
+	//     defer dnWriter.Close()
+	// }
 
 	// Create contract store
 	contractStore := contracts.NewStore(kvStore, cfg.Storage.Path)

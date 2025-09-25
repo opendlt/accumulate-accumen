@@ -32,6 +32,10 @@ type Config struct {
 		BackoffMin  string `yaml:"backoffMin"`  // Minimum backoff duration (e.g., "1s")
 		BackoffMax  string `yaml:"backoffMax"`  // Maximum backoff duration (e.g., "5m")
 	} `yaml:"submitter"`
+	Confirm struct {
+		WaitForExecution bool   `yaml:"waitForExecution"` // Wait for transaction execution confirmation
+		Timeout          string `yaml:"timeout"`          // Timeout for execution confirmation (e.g., "30s")
+	} `yaml:"confirm"`
 	SequencerKey string `yaml:"sequencerKey"` // hex or base64, placeholder
 }
 
@@ -125,6 +129,11 @@ func (c *Config) setDefaults() error {
 		c.Submitter.BackoffMax = "5m"
 	}
 
+	// Set default confirmation configuration
+	if c.Confirm.Timeout == "" {
+		c.Confirm.Timeout = "30s"
+	}
+
 	return nil
 }
 
@@ -203,6 +212,11 @@ func (c *Config) validate() error {
 		return fmt.Errorf("submitter backoff min (%s) cannot be greater than backoff max (%s)", c.Submitter.BackoffMin, c.Submitter.BackoffMax)
 	}
 
+	// Validate confirmation configuration
+	if _, err := time.ParseDuration(c.Confirm.Timeout); err != nil {
+		return fmt.Errorf("invalid confirmation timeout %s: %w", c.Confirm.Timeout, err)
+	}
+
 	return nil
 }
 
@@ -252,6 +266,16 @@ func (c *Config) GetBackoffMaxDuration() time.Duration {
 	if err != nil {
 		// This should not happen if validation passed
 		return 5 * time.Minute
+	}
+	return duration
+}
+
+// GetConfirmTimeoutDuration returns the confirmation timeout as a time.Duration
+func (c *Config) GetConfirmTimeoutDuration() time.Duration {
+	duration, err := time.ParseDuration(c.Confirm.Timeout)
+	if err != nil {
+		// This should not happen if validation passed
+		return 30 * time.Second
 	}
 	return duration
 }

@@ -16,10 +16,11 @@ import (
 
 // DNWriter handles writing transaction metadata and anchors to Accumulate Directory Network
 type DNWriter struct {
-	mu       sync.RWMutex
-	config   *DNWriterConfig
-	l0Client *l0api.Client
-	stats    *WriterStats
+	mu              sync.RWMutex
+	config          *DNWriterConfig
+	l0Client        *l0api.Client
+	eventSubscriber *l0api.EventSubscriber
+	stats           *WriterStats
 }
 
 // DNWriterConfig defines configuration for the DN writer
@@ -34,16 +35,22 @@ type DNWriterConfig struct {
 	// Writer configuration
 	MaxRetries int
 	RetryDelay time.Duration
+
+	// Execution confirmation
+	WaitForExecution bool
+	ExecutionTimeout time.Duration
 }
 
 // DefaultDNWriterConfig returns default configuration
 func DefaultDNWriterConfig() *DNWriterConfig {
 	return &DNWriterConfig{
-		L0Endpoint:   "https://mainnet.accumulatenetwork.io/v3",
-		L0Timeout:    30 * time.Second,
-		SequencerKey: "",
-		MaxRetries:   3,
-		RetryDelay:   time.Second,
+		L0Endpoint:       "https://mainnet.accumulatenetwork.io/v3",
+		L0Timeout:        30 * time.Second,
+		SequencerKey:     "",
+		MaxRetries:       3,
+		RetryDelay:       time.Second,
+		WaitForExecution: false,
+		ExecutionTimeout: 30 * time.Second,
 	}
 }
 
@@ -85,6 +92,15 @@ func NewDNWriter(config *DNWriterConfig) (*DNWriter, error) {
 		stats:    &WriterStats{},
 	}
 
+	// Create event subscriber if execution confirmation is enabled
+	if config.WaitForExecution {
+		eventSubscriber, err := l0api.NewEventSubscriber(config.L0Endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create event subscriber: %w", err)
+		}
+		writer.eventSubscriber = eventSubscriber
+	}
+
 	return writer, nil
 }
 
@@ -111,6 +127,14 @@ func (w *DNWriter) WriteMetadata(ctx context.Context, jsonBytes []byte, basePath
 	if err != nil {
 		w.recordError()
 		return "", fmt.Errorf("failed to write metadata to DN: %w", err)
+	}
+
+	// Wait for execution if enabled
+	if w.config.WaitForExecution && w.eventSubscriber != nil {
+		if err := w.waitForExecution(ctx, txID); err != nil {
+			w.recordError()
+			return txID, fmt.Errorf("metadata submitted but execution failed: %w", err)
+		}
 	}
 
 	// Record success
@@ -142,6 +166,14 @@ func (w *DNWriter) WriteAnchor(ctx context.Context, blob []byte, basePath string
 	if err != nil {
 		w.recordError()
 		return "", fmt.Errorf("failed to write anchor to DN: %w", err)
+	}
+
+	// Wait for execution if enabled
+	if w.config.WaitForExecution && w.eventSubscriber != nil {
+		if err := w.waitForExecution(ctx, txID); err != nil {
+			w.recordError()
+			return txID, fmt.Errorf("anchor submitted but execution failed: %w", err)
+		}
 	}
 
 	// Record success
@@ -218,6 +250,37 @@ func (w *DNWriter) submitWithRetry(ctx context.Context, envelope *build.Envelope
 	return "", fmt.Errorf("failed after %d attempts: %w", w.config.MaxRetries, lastErr)
 }
 
+// waitForExecution waits for transaction execution confirmation via WebSocket
+func (w *DNWriter) waitForExecution(ctx context.Context, txID string) error {
+	if w.eventSubscriber == nil {
+		return fmt.Errorf("event subscriber not available")
+	}
+
+	// Start event subscriber if not already started
+	if !w.eventSubscriber.GetConnectionStatus() {
+		if err := w.eventSubscriber.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start event subscriber: %w", err)
+		}
+	}
+
+	// Wait for confirmation
+	confirmation, err := w.eventSubscriber.WaitForConfirmation(ctx, txID, w.config.ExecutionTimeout)
+	if err != nil {
+		return fmt.Errorf("failed to get execution confirmation: %w", err)
+	}
+
+	// Check execution status
+	if confirmation.Status == "failed" {
+		return fmt.Errorf("transaction execution failed (code %d): %s", confirmation.Code, confirmation.Log)
+	}
+
+	if confirmation.Status != "executed" {
+		return fmt.Errorf("unexpected transaction status: %s", confirmation.Status)
+	}
+
+	return nil
+}
+
 // shouldRetry determines if an error should trigger a retry
 func (w *DNWriter) shouldRetry(err error) bool {
 	// For now, retry all errors except context cancellation
@@ -273,8 +336,21 @@ func (w *DNWriter) GetStats() WriterStats {
 
 // Close closes the DN writer and releases resources
 func (w *DNWriter) Close() error {
-	if w.l0Client != nil {
-		return w.l0Client.Close()
+	var err error
+
+	// Close event subscriber if present
+	if w.eventSubscriber != nil {
+		if closeErr := w.eventSubscriber.Stop(); closeErr != nil {
+			err = closeErr
+		}
 	}
-	return nil
+
+	// Close L0 client
+	if w.l0Client != nil {
+		if closeErr := w.l0Client.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
+
+	return err
 }
