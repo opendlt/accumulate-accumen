@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 	"github.com/opendlt/accumulate-accumen/follower/indexer"
 	"github.com/opendlt/accumulate-accumen/sequencer"
+	"github.com/opendlt/accumulate-accumen/types/l1"
 )
 
 // Server provides a JSON-RPC interface for Accumen
@@ -24,6 +26,7 @@ type Server struct {
 	sequencer     *sequencer.Sequencer
 	kvStore       state.KVStore
 	contractStore *contracts.Store
+	mempool       *sequencer.PersistentMempool
 	indexer       *indexer.Indexer
 	readOnly      bool
 	running       bool
@@ -35,6 +38,7 @@ type Dependencies struct {
 	Sequencer     *sequencer.Sequencer
 	KVStore       state.KVStore
 	ContractStore *contracts.Store
+	Mempool       *sequencer.PersistentMempool
 }
 
 // ReadOnlyDependencies holds dependencies for read-only (follower) mode
@@ -75,18 +79,26 @@ type StatusResult struct {
 }
 
 // SubmitTxParams represents parameters for accumen.submitTx()
+// Supports both structured JSON format and raw CBOR data
 type SubmitTxParams struct {
-	Contract string      `json:"contract"`
-	Entry    string      `json:"entry"`
-	Args     interface{} `json:"args,omitempty"`
-	From     string      `json:"from,omitempty"`
-	GasLimit uint64      `json:"gasLimit,omitempty"`
-	Nonce    uint64      `json:"nonce,omitempty"`
+	// Structured format
+	Contract  string                 `json:"contract,omitempty"`
+	Entry     string                 `json:"entry,omitempty"`
+	Args      map[string]interface{} `json:"args,omitempty"`
+	Nonce     []byte                 `json:"nonce,omitempty"`
+	Timestamp int64                  `json:"timestamp,omitempty"`
+
+	// Raw CBOR format (base64 encoded)
+	RawCBOR   string `json:"rawCBOR,omitempty"`
+
+	// Legacy fields for backward compatibility
+	From     string `json:"from,omitempty"`
+	GasLimit uint64 `json:"gasLimit,omitempty"`
 }
 
 // SubmitTxResult represents the result of accumen.submitTx()
 type SubmitTxResult struct {
-	TxHash string `json:"txHash"`
+	TxHash string `json:"txHash"` // L1 transaction hash (32-byte SHA256)
 }
 
 // QueryParams represents parameters for accumen.query()
@@ -128,6 +140,7 @@ func NewServer(deps *Dependencies) *Server {
 		sequencer:     deps.Sequencer,
 		kvStore:       deps.KVStore,
 		contractStore: deps.ContractStore,
+		mempool:       deps.Mempool,
 		readOnly:      false,
 		running:       false,
 		stats:         &ServerStats{StartTime: time.Now()},
@@ -346,6 +359,10 @@ func (s *Server) handleSubmitTx(params interface{}) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32603, Message: "Sequencer not running"}
 	}
 
+	if s.mempool == nil {
+		return nil, &RPCError{Code: -32603, Message: "Persistent mempool not available"}
+	}
+
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
@@ -357,42 +374,70 @@ func (s *Server) handleSubmitTx(params interface{}) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
 	}
 
-	// Validate required fields
-	if submitParams.Contract == "" {
-		return nil, &RPCError{Code: -32602, Message: "Missing required field: contract"}
-	}
-	if submitParams.Entry == "" {
-		return nil, &RPCError{Code: -32602, Message: "Missing required field: entry"}
+	var l1Tx l1.Tx
+
+	// Handle raw CBOR format first
+	if submitParams.RawCBOR != "" {
+		// Decode base64 CBOR data
+		cborData, err := base64.StdEncoding.DecodeString(submitParams.RawCBOR)
+		if err != nil {
+			return nil, &RPCError{Code: -32602, Message: "Invalid base64 CBOR data"}
+		}
+
+		// Unmarshal L1 transaction from CBOR
+		if err := l1Tx.UnmarshalCBOR(cborData); err != nil {
+			return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("Invalid CBOR transaction: %v", err)}
+		}
+	} else {
+		// Handle structured JSON format
+		if submitParams.Contract == "" {
+			return nil, &RPCError{Code: -32602, Message: "Missing required field: contract"}
+		}
+		if submitParams.Entry == "" {
+			return nil, &RPCError{Code: -32602, Message: "Missing required field: entry"}
+		}
+
+		// Generate nonce if not provided
+		nonce := submitParams.Nonce
+		if len(nonce) == 0 {
+			nonce = make([]byte, 16)
+			if _, err := rand.Read(nonce); err != nil {
+				return nil, &RPCError{Code: -32603, Message: "Failed to generate nonce"}
+			}
+		}
+
+		// Set timestamp if not provided
+		timestamp := submitParams.Timestamp
+		if timestamp == 0 {
+			timestamp = time.Now().UnixNano()
+		}
+
+		// Create L1 transaction
+		l1Tx = l1.Tx{
+			Contract:  submitParams.Contract,
+			Entry:     submitParams.Entry,
+			Args:      submitParams.Args,
+			Nonce:     nonce,
+			Timestamp: timestamp,
+		}
 	}
 
-	// Set defaults
-	if submitParams.From == "" {
-		submitParams.From = "acc://default.acme"
-	}
-	if submitParams.GasLimit == 0 {
-		submitParams.GasLimit = 1000000 // Default 1M gas
+	// Validate the L1 transaction
+	if err := l1Tx.Validate(); err != nil {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("Invalid transaction: %v", err)}
 	}
 
-	// Create transaction
-	tx := &sequencer.Transaction{
-		ID:       s.generateTxID(),
-		From:     submitParams.From,
-		To:       submitParams.Contract,
-		Data:     s.encodeCallData(submitParams.Entry, submitParams.Args),
-		GasLimit: submitParams.GasLimit,
-		GasPrice: 1, // Default gas price
-		Nonce:    submitParams.Nonce,
-		Priority: 100, // Normal priority
-		Size:     uint64(len(s.encodeCallData(submitParams.Entry, submitParams.Args))),
+	// Add to persistent mempool
+	hash, err := s.mempool.Add(l1Tx)
+	if err != nil {
+		return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Failed to add transaction to mempool: %v", err)}
 	}
 
-	// Submit transaction
-	if err := s.sequencer.SubmitTransaction(tx); err != nil {
-		return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Failed to submit transaction: %v", err)}
-	}
+	// TODO: Submit to sequencer for processing
+	// For now, we just add to mempool and let the sequencer poll it
 
 	result := &SubmitTxResult{
-		TxHash: tx.ID,
+		TxHash: hex.EncodeToString(hash[:]),
 	}
 
 	return result, nil

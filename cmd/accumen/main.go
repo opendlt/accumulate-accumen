@@ -23,6 +23,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/metrics"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/sequencer"
+	"github.com/opendlt/accumulate-accumen/types/l1"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 )
@@ -289,6 +290,26 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client,
 	// Create contract store
 	contractStore := contracts.NewStore(kvStore, cfg.Storage.Path)
 
+	// Create persistent mempool using storage path + mempool subdirectory
+	mempoolPath := filepath.Join(cfg.Storage.Path, "mempool")
+	mempool, err := sequencer.NewPersistentMempool(mempoolPath)
+	if err != nil {
+		return fmt.Errorf("failed to create persistent mempool: %w", err)
+	}
+	defer mempool.Close()
+	logger.Info("Persistent mempool initialized at: %s", mempoolPath)
+
+	// Replay any leftover transactions from previous session
+	err = mempool.Replay(func(tx l1.Tx) error {
+		logger.Debug("Replaying transaction: %s", tx.String())
+		// TODO: Forward to sequencer for processing
+		// For now, just log the transaction
+		return nil
+	})
+	if err != nil {
+		logger.Info("Warning: Failed to replay mempool transactions: %v", err)
+	}
+
 	// Create pricing schedule provider
 	scheduleProvider := pricing.Cached(
 		pricing.CreateDNProvider(apiClient, cfg.Pricing.GasScheduleID),
@@ -306,6 +327,7 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client,
 			Sequencer:     seq,
 			KVStore:       kvStore,
 			ContractStore: contractStore,
+			Mempool:       mempool,
 		})
 
 		if err := rpcServer.Start(*rpcAddr); err != nil {

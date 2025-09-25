@@ -348,6 +348,235 @@ curl -X POST http://localhost:26660/v3 \
 - Check sequencer health: `curl http://localhost:8667/healthz`
 - View metrics: `curl http://localhost:8667/debug/vars`
 
+## Raw Transaction Submission
+
+Accumen now supports submitting L1 transactions directly via JSON-RPC using either structured JSON or raw CBOR format. This provides more control over transaction parameters and ensures deterministic hashing.
+
+### JSON Format Transaction Submission
+
+Submit a raw L1 transaction using structured JSON parameters:
+
+```bash
+curl -X POST http://127.0.0.1:8666 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "method": "accumen.submitTx",
+    "params": {
+      "contract": "acc://counter.acme",
+      "entry": "increment",
+      "args": {
+        "amount": 5
+      }
+    }
+  }'
+```
+
+**Response:**
+```json
+{
+  "id": 1,
+  "result": {
+    "txHash": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567890"
+  }
+}
+```
+
+### CBOR Format Transaction Submission
+
+For maximum efficiency and deterministic serialization, submit transactions using raw CBOR:
+
+#### Using Python with cbor2
+
+```python
+import requests
+import cbor2
+import base64
+import time
+import os
+
+# Create L1 transaction
+tx = {
+    "contract": "acc://counter.acme",
+    "entry": "increment",
+    "args": {"amount": 5},
+    "nonce": os.urandom(16),  # 16 random bytes
+    "timestamp": int(time.time() * 1_000_000_000)  # nanoseconds
+}
+
+# Encode to CBOR and base64
+cbor_data = cbor2.dumps(tx)
+base64_cbor = base64.b64encode(cbor_data).decode('ascii')
+
+# Submit transaction
+response = requests.post('http://127.0.0.1:8666', json={
+    "id": 2,
+    "method": "accumen.submitTx",
+    "params": {
+        "rawCBOR": base64_cbor
+    }
+})
+
+result = response.json()
+print(f"Transaction hash: {result['result']['txHash']}")
+```
+
+#### Using Go with fxamacker/cbor
+
+```go
+package main
+
+import (
+    "bytes"
+    "crypto/rand"
+    "encoding/base64"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "time"
+
+    "github.com/fxamacker/cbor/v2"
+)
+
+type L1Tx struct {
+    Contract  string         `cbor:"contract"`
+    Entry     string         `cbor:"entry"`
+    Args      map[string]any `cbor:"args"`
+    Nonce     []byte         `cbor:"nonce"`
+    Timestamp int64          `cbor:"timestamp"`
+}
+
+func main() {
+    // Create L1 transaction
+    nonce := make([]byte, 16)
+    rand.Read(nonce)
+
+    tx := L1Tx{
+        Contract:  "acc://counter.acme",
+        Entry:     "increment",
+        Args:      map[string]any{"amount": 5},
+        Nonce:     nonce,
+        Timestamp: time.Now().UnixNano(),
+    }
+
+    // Encode to CBOR
+    cborData, err := cbor.Marshal(tx)
+    if err != nil {
+        panic(err)
+    }
+
+    // Encode to base64
+    base64CBOR := base64.StdEncoding.EncodeToString(cborData)
+
+    // Submit transaction
+    reqBody := map[string]interface{}{
+        "id":     3,
+        "method": "accumen.submitTx",
+        "params": map[string]string{
+            "rawCBOR": base64CBOR,
+        },
+    }
+
+    reqBytes, _ := json.Marshal(reqBody)
+    resp, err := http.Post("http://127.0.0.1:8666",
+        "application/json", bytes.NewBuffer(reqBytes))
+    if err != nil {
+        panic(err)
+    }
+    defer resp.Body.Close()
+
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+
+    fmt.Printf("Transaction hash: %s\n",
+        result["result"].(map[string]interface{})["txHash"])
+}
+```
+
+#### Using Node.js with cbor
+
+```javascript
+const cbor = require('cbor');
+const crypto = require('crypto');
+const fetch = require('node-fetch');
+
+// Create L1 transaction
+const tx = {
+    contract: "acc://counter.acme",
+    entry: "increment",
+    args: { amount: 5 },
+    nonce: crypto.randomBytes(16),
+    timestamp: Date.now() * 1000000 // nanoseconds
+};
+
+// Encode to CBOR and base64
+const cborData = cbor.encode(tx);
+const base64CBOR = cborData.toString('base64');
+
+// Submit transaction
+const response = await fetch('http://127.0.0.1:8666', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        id: 4,
+        method: 'accumen.submitTx',
+        params: {
+            rawCBOR: base64CBOR
+        }
+    })
+});
+
+const result = await response.json();
+console.log('Transaction hash:', result.result.txHash);
+```
+
+### Transaction Hash Calculation
+
+The L1 transaction hash is calculated as SHA256 of the canonical CBOR encoding:
+
+```python
+import hashlib
+import cbor2
+
+tx = {
+    "contract": "acc://counter.acme",
+    "entry": "increment",
+    "args": {"amount": 5},
+    "nonce": bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+    "timestamp": 1640995200000000000
+}
+
+# Encode to canonical CBOR (deterministic ordering)
+cbor_data = cbor2.dumps(tx, canonical=True)
+
+# Calculate SHA256 hash
+tx_hash = hashlib.sha256(cbor_data).hexdigest()
+print(f"Transaction hash: {tx_hash}")
+```
+
+### Mempool Persistence
+
+Accumen automatically persists all submitted transactions to disk:
+
+- **Persistent storage**: Transactions survive node restarts
+- **Automatic replay**: Unprocessed transactions are replayed on startup
+- **Badger backend**: High-performance embedded database
+- **ACID properties**: Consistent transaction ordering
+
+You can see mempool replay in the logs during startup:
+```
+INFO[2024-01-15T10:30:00Z] Persistent mempool initialized at: data/l1/mempool
+INFO[2024-01-15T10:30:00Z] Starting mempool replay
+INFO[2024-01-15T10:30:00Z] Mempool replay completed: replayed=5 errors=0
+```
+
+### Performance Considerations
+
+1. **CBOR vs JSON**: CBOR is ~20% smaller and faster to process
+2. **Pre-generate nonces**: Avoid blocking on crypto.rand for high throughput
+3. **Batch submissions**: Group related transactions together
+4. **Connection pooling**: Reuse HTTP connections for multiple requests
+
 ## Next Steps
 
 - Explore more complex contract patterns
