@@ -1,0 +1,138 @@
+# Accumen Local Development Configuration
+# This configuration is optimized for local development and testing
+
+# Server configuration
+listen_addr: "127.0.0.1:8080"
+metrics_addr: "127.0.0.1:8081"
+health_addr: "127.0.0.1:8082"
+
+# Block production settings
+block_time: "1s"
+max_transactions: 100
+
+# Mempool configuration
+mempool:
+  max_size: 10000
+  max_age: "1h"
+  priority_enabled: true
+  account_limit: 1000
+  cleanup_interval: "30s"
+
+# Execution engine configuration
+execution:
+  workers: 4
+  queue_size: 1000
+  timeout: "30s"
+  gas_limit: 10000000
+  memory_limit: 32
+
+# WASM runtime configuration
+wasm:
+  debug: true
+  max_memory_pages: 32
+  gas_limit: 10000000
+  enable_validation: true
+
+# Bridge configuration (L0 integration)
+bridge:
+  enable_bridge: false  # Disabled by default for local dev
+  client:
+    endpoint: "https://mainnet.accumulatenetwork.io/v3"
+    timeout: "30s"
+    retry_count: 3
+    retry_delay: "1s"
+
+  # Output staging
+  stager:
+    max_outputs: 10000
+    flush_interval: "5s"
+    batch_size: 100
+
+  # Output submission
+  submitter:
+    workers: 2
+    queue_size: 1000
+    timeout: "30s"
+    retry_count: 3
+    retry_delay: "2s"
+    batch_size: 50
+
+  # Credit pricing
+  pricing:
+    base_price: 100
+    gas_price: 1
+    size_price: 10
+    priority_rate: 1.5
+
+# Directory Network registry configuration
+registry:
+  endpoint: "https://mainnet.accumulatenetwork.io/v3"
+  timeout: "10s"
+  cache_ttl: "5m"
+  max_retries: 3
+
+# Logging configuration
+logging:
+  level: "info"
+  format: "text"
+  output: "stdout"
+  structured: false
+
+# Development features
+development:
+  enable_pprof: true
+  pprof_addr: "127.0.0.1:6060"
+  enable_cors: true
+  cors_origins: ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+# Database configuration (for persistence)
+database:
+  type: "memory"  # Use in-memory store for local dev
+  path: "./data/accumen.db"
+  max_connections: 10
+  connection_timeout: "5s"
+
+# API configuration
+api:
+  enable_rest: true
+  rest_addr: "127.0.0.1:8083"
+  enable_grpc: false
+  grpc_addr: "127.0.0.1:8084"
+  rate_limit:
+    enabled: false
+    requests_per_second: 100
+    burst: 200
+
+# Security configuration
+security:
+  enable_tls: false
+  cert_file: ""
+  key_file: ""
+  require_auth: false
+  allowed_origins: ["*"]
+
+# Monitoring configuration
+monitoring:
+  enable_metrics: true
+  metrics_path: "/metrics"
+  enable_tracing: false
+  jaeger_endpoint: ""
+
+# Feature flags
+features:
+  enable_experimental: true
+  enable_debug_endpoints: true
+  enable_admin_api: true
+
+# Performance tuning
+performance:
+  gc_target_percentage: 10
+  max_procs: 0  # Use all available CPUs
+  memory_limit: "1GB"
+
+# Test configuration overrides
+test:
+  fast_blocks: true
+  mock_l0: true
+  disable_bridge: true
+  log_level: "debug"
