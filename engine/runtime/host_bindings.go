@@ -5,17 +5,24 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/host"
 )
 
 // RegisterHostBindings registers all AccuWASM host functions with the given module builder
-func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.API) error {
+func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.API, gasMeter *gas.Meter, execContext *ExecutionContext) error {
 	// Core state operations
 	builder.NewFunctionBuilder().
 		WithName("accuwasm_get").
 		WithParameterNames("key_ptr", "key_len", "value_ptr", "value_len").
 		WithResultNames("result_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge gas for read operation
+			if !gasMeter.TryConsume(gas.GasCost(100)) {
+				stack[0] = uint64(^uint32(0)) // Return error (-1 as uint32)
+				return
+			}
+
 			keyPtr := uint32(stack[0])
 			keyLen := uint32(stack[1])
 			valuePtr := uint32(stack[2])
@@ -30,6 +37,11 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithName("accuwasm_set").
 		WithParameterNames("key_ptr", "key_len", "value_ptr", "value_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge gas for write operation
+			if !gasMeter.TryConsume(gas.GasCost(200)) {
+				return
+			}
+
 			keyPtr := uint32(stack[0])
 			keyLen := uint32(stack[1])
 			valuePtr := uint32(stack[2])
@@ -216,6 +228,150 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 			hostAPI.Abort(ctx, mod, msgPtr, msgLen)
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
 		Export("accuwasm_abort")
+
+	// L0 operations
+	builder.NewFunctionBuilder().
+		WithName("l0_write_data").
+		WithParameterNames("account_ptr", "account_len", "data_ptr", "data_len").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge gas for L0 operation
+			if !gasMeter.TryConsume(gas.GasCost(1000)) {
+				return
+			}
+
+			accountPtr := uint32(stack[0])
+			accountLen := uint32(stack[1])
+			dataPtr := uint32(stack[2])
+			dataLen := uint32(stack[3])
+
+			// Read account URL and data from WASM memory
+			memory := mod.Memory()
+			accountBytes, _ := memory.Read(accountPtr, accountLen)
+			dataBytes, _ := memory.Read(dataPtr, dataLen)
+
+			// Stage L0 operation
+			op := &StagedOp{
+				Type:    "write_data",
+				Account: string(accountBytes),
+				Data:    dataBytes,
+			}
+			execContext.stagedOps = append(execContext.stagedOps, op)
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
+		Export("l0_write_data")
+
+	builder.NewFunctionBuilder().
+		WithName("l0_send_tokens").
+		WithParameterNames("from_ptr", "from_len", "to_ptr", "to_len", "amount").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge gas for L0 operation
+			if !gasMeter.TryConsume(gas.GasCost(1500)) {
+				return
+			}
+
+			fromPtr := uint32(stack[0])
+			fromLen := uint32(stack[1])
+			toPtr := uint32(stack[2])
+			toLen := uint32(stack[3])
+			amount := stack[4]
+
+			// Read addresses from WASM memory
+			memory := mod.Memory()
+			fromBytes, _ := memory.Read(fromPtr, fromLen)
+			toBytes, _ := memory.Read(toPtr, toLen)
+
+			// Stage L0 operation
+			op := &StagedOp{
+				Type:    "send_tokens",
+				From:    string(fromBytes),
+				To:      string(toBytes),
+				Amount:  amount,
+			}
+			execContext.stagedOps = append(execContext.stagedOps, op)
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64}, []api.ValueType{}).
+		Export("l0_send_tokens")
+
+	builder.NewFunctionBuilder().
+		WithName("l0_update_auth").
+		WithParameterNames("account_ptr", "account_len", "auth_ptr", "auth_len").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge gas for L0 operation
+			if !gasMeter.TryConsume(gas.GasCost(800)) {
+				return
+			}
+
+			accountPtr := uint32(stack[0])
+			accountLen := uint32(stack[1])
+			authPtr := uint32(stack[2])
+			authLen := uint32(stack[3])
+
+			// Read account URL and auth data from WASM memory
+			memory := mod.Memory()
+			accountBytes, _ := memory.Read(accountPtr, accountLen)
+			authBytes, _ := memory.Read(authPtr, authLen)
+
+			// Stage L0 operation
+			op := &StagedOp{
+				Type:    "update_auth",
+				Account: string(accountBytes),
+				Data:    authBytes,
+			}
+			execContext.stagedOps = append(execContext.stagedOps, op)
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
+		Export("l0_update_auth")
+
+	// Credits pricing
+	builder.NewFunctionBuilder().
+		WithName("credits_quote").
+		WithParameterNames("gas_estimate").
+		WithResultNames("credits_needed").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge gas for quote operation
+			if !gasMeter.TryConsume(gas.GasCost(50)) {
+				stack[0] = 0
+				return
+			}
+
+			gasEstimate := stack[0]
+
+			// Simple placeholder: 150 credits per 1k gas (configurable later)
+			const creditsPerKiloGas = 150
+			creditsNeeded := (gasEstimate * creditsPerKiloGas) / 1000
+			if creditsNeeded == 0 && gasEstimate > 0 {
+				creditsNeeded = 1 // Minimum 1 credit
+			}
+
+			stack[0] = creditsNeeded
+		}), []api.ValueType{api.ValueTypeI64}, []api.ValueType{api.ValueTypeI64}).
+		Export("credits_quote")
+
+	// Emit event
+	builder.NewFunctionBuilder().
+		WithName("emit_event").
+		WithParameterNames("event_type_ptr", "event_type_len", "event_data_ptr", "event_data_len").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge gas for event emission
+			if !gasMeter.TryConsume(gas.GasCost(300)) {
+				return
+			}
+
+			eventTypePtr := uint32(stack[0])
+			eventTypeLen := uint32(stack[1])
+			eventDataPtr := uint32(stack[2])
+			eventDataLen := uint32(stack[3])
+
+			// Read event type and data from WASM memory
+			memory := mod.Memory()
+			eventTypeBytes, _ := memory.Read(eventTypePtr, eventTypeLen)
+			eventDataBytes, _ := memory.Read(eventDataPtr, eventDataLen)
+
+			// Add event to execution context
+			event := &Event{
+				Type: string(eventTypeBytes),
+				Data: eventDataBytes,
+			}
+			execContext.events = append(execContext.events, event)
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
+		Export("emit_event")
 
 	return nil
 }

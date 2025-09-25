@@ -40,6 +40,8 @@ type ExecResult struct {
 	Error         string              `json:"error,omitempty"`
 	ExecutionTime time.Duration       `json:"execution_time"`
 	StateChanges  []state.StateChange `json:"state_changes"`
+	StagedOps     []*runtime.StagedOp `json:"staged_ops"`
+	Events        []*runtime.Event    `json:"events"`
 }
 
 // ExecutionEngine handles transaction execution for the sequencer
@@ -292,6 +294,8 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		result.Success = true
 		result.GasUsed = execResult.GasUsed
 		result.Receipt = execResult.Receipt
+		result.StagedOps = execResult.StagedOps
+		result.Events = execResult.Events
 
 		// Extract state changes from receipt
 		if execResult.Receipt != nil {
@@ -301,6 +305,8 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		result.Success = false
 		result.Error = execResult.Error.Error()
 		result.GasUsed = execResult.GasUsed
+		result.StagedOps = execResult.StagedOps
+		result.Events = execResult.Events
 	}
 
 	result.ExecutionTime = time.Since(startTime)
@@ -437,13 +443,21 @@ func (e *ExecutionEngine) SimulateTransaction(ctx context.Context, tx *Transacti
 		}, nil
 	}
 
-	return &ExecResult{
-		TxID:         tx.ID,
-		Success:      execResult.Success,
-		GasUsed:      execResult.GasUsed,
-		Receipt:      execResult.Receipt,
-		StateChanges: execResult.Receipt.StateChanges,
-	}, nil
+	simResult := &ExecResult{
+		TxID:      tx.ID,
+		Success:   execResult.Success,
+		GasUsed:   execResult.GasUsed,
+		Receipt:   execResult.Receipt,
+		StagedOps: execResult.StagedOps,
+		Events:    execResult.Events,
+	}
+
+	// Extract state changes from receipt
+	if execResult.Receipt != nil {
+		simResult.StateChanges = execResult.Receipt.StateChanges
+	}
+
+	return simResult, nil
 }
 
 // Close shuts down the execution engine

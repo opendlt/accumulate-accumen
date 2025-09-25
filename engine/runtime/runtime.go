@@ -39,12 +39,54 @@ func DefaultConfig() *Config {
 	}
 }
 
+// StagedOp represents a staged L0 operation
+type StagedOp struct {
+	Type    string // "write_data", "send_tokens", "update_auth"
+	Account string // Account URL
+	From    string // For send_tokens
+	To      string // For send_tokens
+	Amount  uint64 // For send_tokens
+	Data    []byte // For write_data and update_auth
+}
+
+// Event represents an emitted event
+type Event struct {
+	Type string
+	Data []byte
+}
+
+// ExecutionContext holds context for WASM execution
+type ExecutionContext struct {
+	stagedOps []*StagedOp
+	events    []*Event
+}
+
+// NewExecutionContext creates a new execution context
+func NewExecutionContext() *ExecutionContext {
+	return &ExecutionContext{
+		stagedOps: make([]*StagedOp, 0),
+		events:    make([]*Event, 0),
+	}
+}
+
+// GetStagedOps returns the staged operations
+func (ec *ExecutionContext) GetStagedOps() []*StagedOp {
+	return ec.stagedOps
+}
+
+// GetEvents returns the emitted events
+func (ec *ExecutionContext) GetEvents() []*Event {
+	return ec.events
+}
+
 // ExecutionResult represents the result of WASM execution
 type ExecutionResult struct {
 	Success     bool
 	ReturnValue []byte
 	GasUsed     uint64
 	Receipt     *state.Receipt
+	StagedOps   []*StagedOp
+	Events      []*Event
 	Error       error
 }
 
@@ -102,9 +144,12 @@ func (r *Runtime) Execute(ctx context.Context, functionName string, params []uin
 	// Create host API
 	r.hostAPI = host.NewAPI(gasMeter, kvStore)
 
+	// Create execution context
+	execContext := NewExecutionContext()
+
 	// Register host bindings
 	hostModuleBuilder := r.wazeroRuntime.NewHostModuleBuilder("accuwasm_host")
-	if err := RegisterHostBindings(ctx, hostModuleBuilder, r.hostAPI); err != nil {
+	if err := RegisterHostBindings(ctx, hostModuleBuilder, r.hostAPI, gasMeter, execContext); err != nil {
 		return &ExecutionResult{
 			Success: false,
 			Error:   fmt.Errorf("failed to register host bindings: %w", err),
@@ -180,6 +225,8 @@ func (r *Runtime) Execute(ctx context.Context, functionName string, params []uin
 		ReturnValue: returnValue,
 		GasUsed:     gasUsed,
 		Receipt:     receipt,
+		StagedOps:   execContext.GetStagedOps(),
+		Events:      execContext.GetEvents(),
 	}, nil
 }
 
