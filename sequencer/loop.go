@@ -2,6 +2,8 @@ package sequencer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
+	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/registry/dn"
 	"github.com/opendlt/accumulate-accumen/types/json"
 
@@ -43,6 +46,10 @@ type Sequencer struct {
 	currentBlock *Block
 	blockHeight  uint64
 
+	// Anchoring state
+	lastAnchorHeight uint64
+	anchorInterval   uint64
+
 	// Control channels
 	stopChan     chan struct{}
 	blockTicker  *time.Ticker
@@ -63,6 +70,7 @@ type SequencerStats struct {
 	MempoolStats   *MempoolStats     `json:"mempool_stats"`
 	ExecutionStats *ExecutionStats   `json:"execution_stats"`
 	BridgeStats    *outputs.SubmissionStats `json:"bridge_stats"`
+	DNWriterStats  *anchors.WriterStats      `json:"dn_writer_stats"`
 }
 
 // NewSequencer creates a new Accumen sequencer
@@ -102,27 +110,31 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 	}
 
 	// Create metadata builder
-	metadataBuilder := json.NewMetadataBuilder(json.DefaultBuilderConfig())
+	metadataBuilder := json.NewMetadataBuilder()
 
-	// Create DN writer
-	dnWriter, err := anchors.NewDNWriter(anchors.DefaultDNWriterConfig())
+	// Create DN writer with sequencer key
+	dnWriterConfig := anchors.DefaultDNWriterConfig()
+	dnWriterConfig.SequencerKey = config.Bridge.Client.SequencerKey
+	dnWriter, err := anchors.NewDNWriter(dnWriterConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DN writer: %w", err)
 	}
 
 	sequencer := &Sequencer{
-		config:         config,
-		mempool:        mempool,
-		engine:         engine,
-		l0Client:       l0Client,
-		outputStager:   outputStager,
-		submitter:       submitter,
-		creditMgr:       creditMgr,
-		registryClient:  registryClient,
-		metadataBuilder: metadataBuilder,
-		dnWriter:        dnWriter,
-		blockHeight:     engine.GetCurrentHeight(),
-		stopChan:        make(chan struct{}),
+		config:           config,
+		mempool:          mempool,
+		engine:           engine,
+		l0Client:         l0Client,
+		outputStager:     outputStager,
+		submitter:        submitter,
+		creditMgr:        creditMgr,
+		registryClient:   registryClient,
+		metadataBuilder:  metadataBuilder,
+		dnWriter:         dnWriter,
+		blockHeight:      engine.GetCurrentHeight(),
+		lastAnchorHeight: 0,
+		anchorInterval:   10, // Anchor every 10 blocks by default
+		stopChan:         make(chan struct{}),
 	}
 
 	return sequencer, nil
@@ -149,11 +161,6 @@ func (s *Sequencer) Start(ctx context.Context) error {
 	if s.config.Bridge.EnableBridge {
 		if err := s.submitter.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start output submitter: %w", err)
-		}
-
-		// Start DN writer
-		if err := s.dnWriter.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start DN writer: %w", err)
 		}
 	}
 
@@ -195,15 +202,14 @@ func (s *Sequencer) Stop(ctx context.Context) error {
 		return fmt.Errorf("failed to stop mempool: %w", err)
 	}
 
-	// Stop output submitter and DN writer
+	// Stop output submitter
 	if err := s.submitter.Stop(); err != nil {
 		return fmt.Errorf("failed to stop output submitter: %w", err)
 	}
 
-	if s.config.Bridge.EnableBridge {
-		if err := s.dnWriter.Stop(ctx); err != nil {
-			return fmt.Errorf("failed to stop DN writer: %w", err)
-		}
+	// Close DN writer
+	if err := s.dnWriter.Close(); err != nil {
+		return fmt.Errorf("failed to close DN writer: %w", err)
 	}
 
 	// Close execution engine
@@ -257,48 +263,213 @@ func (s *Sequencer) produceBlock(ctx context.Context) {
 	s.txsProcessed += uint64(len(block.Transactions))
 	s.mu.Unlock()
 
-	// Submit block to L0 bridge if enabled
+	// Write metadata for each successful transaction
 	if s.config.Bridge.EnableBridge {
-		s.submitBlockToL0(ctx, block)
-		s.writeMetadataToL0(ctx, block)
+		s.writeTransactionMetadata(ctx, block)
+
+		// Check if it's time to write an anchor
+		if s.shouldWriteAnchor(block.Header.Height) {
+			s.writeAnchor(ctx, block)
+		}
 	}
 
 	fmt.Printf("Produced block %d with %d transactions\n",
 		block.Header.Height, len(block.Transactions))
 }
 
-// submitBlockToL0 submits a block to the Accumulate L0 network
-func (s *Sequencer) submitBlockToL0(ctx context.Context, block *Block) {
-	// Create envelope for each successful transaction result
+// writeTransactionMetadata writes metadata for each successful transaction to DN
+func (s *Sequencer) writeTransactionMetadata(ctx context.Context, block *Block) {
+	basePath := "acc://accumen.acme"
+
+	// Process each transaction result
 	for i, result := range block.Results {
 		if !result.Success {
 			continue // Skip failed transactions
 		}
 
-		// Create a simplified envelope (in practice, this would be more complex)
-		// envelope := createEnvelopeFromResult(result, block.Transactions[i])
-
-		// Stage the output for submission
-		metadata := &outputs.OutputMetadata{
-			SequencerID:   block.Header.SequencerID,
+		// Build metadata using the new builder
+		tx := block.Transactions[i]
+		args := json.MetadataArgs{
+			ChainID:       "accumen-devnet-1", // TODO: get from config
 			BlockHeight:   block.Header.Height,
-			OutputIndex:   uint64(i),
-			EstimatedCost: result.GasUsed,
+			TxIndex:       i,
+			TxHash:        []byte(tx.ID), // Convert string to bytes
+			AppHash:       block.StateRoot,
+			Time:          block.Header.Timestamp,
+			ContractAddr:  tx.From, // Use transaction sender as contract address
+			Entry:         "execute", // Default entry point
+			Nonce:         []byte{byte(tx.Nonce)}, // Convert nonce to bytes
+			GasUsed:       result.GasUsed,
+			GasScheduleID: "v1.0.0", // TODO: get from config
+			CreditsL0:     result.GasUsed / 1000 * 150, // 150 credits per 1k gas
+			CreditsL1:     result.GasUsed / 100,  // 1 credit per 100 gas
+			CreditsTotal:  result.GasUsed / 1000 * 150 + result.GasUsed / 100,
+			AcmeBurnt:     fmt.Sprintf("0.%06d", result.GasUsed/1000), // Simple conversion
+			L0Outputs:     s.convertStagedOpsToL0Outputs(result.StagedOps),
+			Events:        s.convertRuntimeEventsToJSONEvents(result.Events),
 		}
 
-		// For now, create a placeholder envelope
-		// In practice, this would convert the execution result to a proper Accumulate transaction
-		envelope := &messaging.Envelope{} // placeholder
-
-		staged, err := s.outputStager.StageOutput(ctx, envelope, metadata)
+		// Build the metadata JSON
+		jsonBytes, err := s.metadataBuilder.BuildMetadata(args)
 		if err != nil {
-			fmt.Printf("Failed to stage output for tx %s: %v\n", result.TxID, err)
+			fmt.Printf("Failed to build metadata for tx %s: %v\n", result.TxID, err)
 			continue
 		}
 
-		// Mark as ready for submission
-		s.outputStager.UpdateOutputStatus(staged.ID, outputs.StageStatusReady)
+		// Write metadata to DN asynchronously
+		go func(jsonData []byte, txID string) {
+			txid, err := s.dnWriter.WriteMetadata(ctx, jsonData, basePath)
+			if err != nil {
+				fmt.Printf("Failed to write metadata for tx %s: %v\n", txID, err)
+				return
+			}
+			fmt.Printf("Metadata written for tx %s: %s\n", txID, txid)
+		}(jsonBytes, result.TxID)
 	}
+}
+
+// shouldWriteAnchor determines if an anchor should be written for this block
+func (s *Sequencer) shouldWriteAnchor(blockHeight uint64) bool {
+	return blockHeight > 0 && blockHeight%s.anchorInterval == 0
+}
+
+// writeAnchor writes an anchor blob to DN
+func (s *Sequencer) writeAnchor(ctx context.Context, block *Block) {
+	basePath := "acc://accumen.acme"
+
+	// Build anchor blob with header hash, height, and merkle placeholders
+	anchorData := s.buildAnchorBlob(block)
+
+	// Write anchor to DN asynchronously
+	go func() {
+		txid, err := s.dnWriter.WriteAnchor(ctx, anchorData, basePath)
+		if err != nil {
+			fmt.Printf("Failed to write anchor for block %d: %v\n", block.Header.Height, err)
+			return
+		}
+
+		// Update last anchor height
+		s.mu.Lock()
+		s.lastAnchorHeight = block.Header.Height
+		s.mu.Unlock()
+
+		fmt.Printf("Anchor written for block %d: %s\n", block.Header.Height, txid)
+	}()
+}
+
+// buildAnchorBlob constructs the anchor blob data
+func (s *Sequencer) buildAnchorBlob(block *Block) []byte {
+	// Calculate header hash
+	headerData := fmt.Sprintf("%d:%s:%d:%d",
+		block.Header.Height,
+		hex.EncodeToString(block.Header.PrevHash),
+		block.Header.Timestamp.Unix(),
+		block.Header.TxCount,
+	)
+	headerHash := sha256.Sum256([]byte(headerData))
+
+	// Build anchor structure
+	anchor := map[string]interface{}{
+		"version":     "1.0.0",
+		"type":        "accumen_anchor",
+		"blockHeight": block.Header.Height,
+		"headerHash":  hex.EncodeToString(headerHash[:]),
+		"timestamp":   block.Header.Timestamp.UTC().Format(time.RFC3339),
+		"txCount":     block.Header.TxCount,
+		"gasUsed":     block.Header.GasUsed,
+		"gasLimit":    block.Header.GasLimit,
+		"stateRoot":   hex.EncodeToString(block.StateRoot),
+		// Merkle proof placeholders - in production these would be real merkle proofs
+		"merkleProof": map[string]interface{}{
+			"root":   hex.EncodeToString(block.StateRoot),
+			"leaves": len(block.Transactions),
+			"depth":  s.calculateMerkleDepth(len(block.Transactions)),
+		},
+		"sequencer": block.Header.SequencerID,
+		"signature": nil, // Will be filled by DN writer signing
+	}
+
+	// Convert to JSON
+	jsonData, err := json.NewMetadataBuilder().PrettyJSON()
+	if err != nil {
+		// Fallback to simple encoding
+		return []byte(fmt.Sprintf(`{
+			"version": "1.0.0",
+			"type": "accumen_anchor",
+			"blockHeight": %d,
+			"headerHash": "%s",
+			"timestamp": "%s",
+			"txCount": %d,
+			"gasUsed": %d,
+			"stateRoot": "%s",
+			"sequencer": "%s"
+		}`,
+			block.Header.Height,
+			hex.EncodeToString(headerHash[:]),
+			block.Header.Timestamp.UTC().Format(time.RFC3339),
+			block.Header.TxCount,
+			block.Header.GasUsed,
+			hex.EncodeToString(block.StateRoot),
+			block.Header.SequencerID,
+		))
+	}
+
+	return jsonData
+}
+
+// calculateMerkleDepth calculates the depth needed for a merkle tree with n leaves
+func (s *Sequencer) calculateMerkleDepth(leaves int) int {
+	if leaves <= 1 {
+		return 0
+	}
+	depth := 0
+	n := leaves
+	for n > 1 {
+		n = (n + 1) / 2
+		depth++
+	}
+	return depth
+}
+
+// convertStagedOpsToL0Outputs converts runtime staged operations to JSON format
+func (s *Sequencer) convertStagedOpsToL0Outputs(stagedOps []*runtime.StagedOp) []map[string]any {
+	outputs := make([]map[string]any, len(stagedOps))
+
+	for i, op := range stagedOps {
+		output := map[string]any{
+			"type":    op.Type,
+			"account": op.Account,
+		}
+
+		switch op.Type {
+		case "write_data":
+			output["data"] = hex.EncodeToString(op.Data)
+		case "send_tokens":
+			output["from"] = op.From
+			output["to"] = op.To
+			output["amount"] = op.Amount
+		case "update_auth":
+			output["data"] = hex.EncodeToString(op.Data)
+		}
+
+		outputs[i] = output
+	}
+
+	return outputs
+}
+
+// convertRuntimeEventsToJSONEvents converts runtime events to JSON events format
+func (s *Sequencer) convertRuntimeEventsToJSONEvents(events []*runtime.Event) []json.EventData {
+	jsonEvents := make([]json.EventData, len(events))
+
+	for i, event := range events {
+		jsonEvents[i] = json.EventData{
+			Key:   event.Type,
+			Value: string(event.Data),
+		}
+	}
+
+	return jsonEvents
 }
 
 // SubmitTransaction submits a transaction to the mempool
@@ -330,7 +501,7 @@ func (s *Sequencer) GetTransaction(txID string) (*Transaction, error) {
 	return s.mempool.GetTransaction(txID)
 }
 
-// GetBlock returns the current block being processed
+// GetCurrentBlock returns the current block being processed
 func (s *Sequencer) GetCurrentBlock() *Block {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -361,7 +532,7 @@ func (s *Sequencer) GetStats() *SequencerStats {
 		uptime = time.Since(s.startTime)
 	}
 
-	return &SequencerStats{
+	stats := &SequencerStats{
 		Running:        s.running,
 		BlockHeight:    s.blockHeight,
 		BlocksProduced: s.blocksProduced,
@@ -370,7 +541,10 @@ func (s *Sequencer) GetStats() *SequencerStats {
 		MempoolStats:   s.mempool.GetStats(),
 		ExecutionStats: s.engine.GetStats(),
 		BridgeStats:    s.submitter.GetSubmissionStats(),
+		DNWriterStats:  &s.dnWriter.GetStats(),
 	}
+
+	return stats
 }
 
 // metricsServer runs a metrics server if enabled
@@ -388,8 +562,9 @@ func (s *Sequencer) metricsServer(ctx context.Context) {
 			return
 		case <-ticker.C:
 			stats := s.GetStats()
-			fmt.Printf("METRICS: height=%d, blocks=%d, txs=%d, uptime=%v\n",
-				stats.BlockHeight, stats.BlocksProduced, stats.TxsProcessed, stats.Uptime)
+			fmt.Printf("METRICS: height=%d, blocks=%d, txs=%d, metadata_written=%d, anchors_written=%d, uptime=%v\n",
+				stats.BlockHeight, stats.BlocksProduced, stats.TxsProcessed,
+				stats.DNWriterStats.MetadataWritten, stats.DNWriterStats.AnchorsWritten, stats.Uptime)
 		}
 	}
 }
@@ -415,6 +590,12 @@ func (s *Sequencer) HealthCheck(ctx context.Context) error {
 	if s.config.Bridge.EnableBridge {
 		if err := s.submitter.HealthCheck(ctx); err != nil {
 			return fmt.Errorf("bridge health check failed: %w", err)
+		}
+
+		// Check DN writer stats for errors
+		dnStats := s.dnWriter.GetStats()
+		if dnStats.Errors > dnStats.MetadataWritten/10 { // More than 10% error rate
+			return fmt.Errorf("DN writer has high error rate")
 		}
 	}
 
@@ -485,40 +666,16 @@ func (s *Sequencer) GetRegistryStats() (*dn.RegistryStats, error) {
 	return s.registryClient.GetRegistryStats()
 }
 
-// writeMetadataToL0 writes transaction metadata to the Accumulate L0 network
-func (s *Sequencer) writeMetadataToL0(ctx context.Context, block *Block) {
-	// Process each successful transaction result
-	for i, result := range block.Results {
-		if !result.Success {
-			continue // Skip failed transactions
-		}
+// SetAnchorInterval updates the anchor interval
+func (s *Sequencer) SetAnchorInterval(interval uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.anchorInterval = interval
+}
 
-		// Build metadata from receipt
-		metadata, err := s.metadataBuilder.BuildFromReceipt(result.Receipt)
-		if err != nil {
-			fmt.Printf("Failed to build metadata for tx %s: %v\n", result.TxID, err)
-			continue
-		}
-
-		// Write metadata to DN with appropriate priority
-		priority := int64(100) // Default priority
-		if result.Receipt.Priority > 0 {
-			priority = int64(result.Receipt.Priority)
-		}
-
-		// Submit metadata asynchronously
-		go func(meta *json.TransactionMetadata, prio int64, txID string) {
-			response, err := s.dnWriter.WriteMetadata(ctx, meta, prio)
-			if err != nil {
-				fmt.Printf("Failed to write metadata for tx %s: %v\n", txID, err)
-				return
-			}
-
-			if response.Success {
-				fmt.Printf("Metadata written for tx %s: %s\n", txID, response.TxHash)
-			} else {
-				fmt.Printf("Metadata write failed for tx %s: %v\n", txID, response.Error)
-			}
-		}(metadata, priority, result.TxID)
-	}
+// GetLastAnchorHeight returns the height of the last anchor
+func (s *Sequencer) GetLastAnchorHeight() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastAnchorHeight
 }
