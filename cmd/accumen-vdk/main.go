@@ -17,6 +17,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/config"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 	"github.com/opendlt/accumulate-accumen/internal/health"
+	"github.com/opendlt/accumulate-accumen/internal/l0"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/internal/metrics"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
@@ -62,6 +63,31 @@ func main() {
 	logz.Info("Starting Accumen VDK runner with config: %s", *configPath)
 	logz.Debug("Configuration: %s", cfg.String())
 
+	// Initialize L0 endpoint manager
+	l0Config := &l0.Config{
+		Source:              l0.Source(cfg.L0.Source),
+		ProxyURL:            cfg.L0.Proxy,
+		StaticURLs:          cfg.L0.Static,
+		WSPath:              cfg.L0.WSPath,
+		HealthCheckInterval: 30 * time.Second,
+		HealthCheckTimeout:  10 * time.Second,
+		MaxFailures:         3,
+		BackoffDuration:     5 * time.Minute,
+	}
+	endpointManager := l0.NewRoundRobin(l0Config)
+	if err := endpointManager.Start(); err != nil {
+		logz.Fatal("Failed to start L0 endpoint manager: %v", err)
+	}
+	defer endpointManager.Stop()
+	logz.Info("VDK L0 endpoint manager started with source: %s", cfg.L0.Source)
+
+	// Get initial endpoint for client setup
+	initialEndpoint, err := endpointManager.Next()
+	if err != nil {
+		logz.Fatal("Failed to get initial L0 endpoint: %v", err)
+	}
+	logz.Info("VDK using initial L0 endpoint: %s", initialEndpoint)
+
 	// Create signer from configuration
 	signerConfig := &signer.SignerConfig{
 		Type: cfg.Signer.Type,
@@ -73,16 +99,16 @@ func main() {
 	}
 	logz.Info("Signer initialized: type=%s", cfg.Signer.Type)
 
-	// Create L0 API client with signer
-	l0ClientConfig := l0api.DefaultClientConfig(cfg.APIV3Endpoints[0])
+	// Create L0 API client with signer using endpoint manager
+	l0ClientConfig := l0api.DefaultClientConfig(initialEndpoint)
 	l0Client, err := l0api.NewClientWithSigner(l0ClientConfig, nodeSigner)
 	if err != nil {
 		logz.Fatal("Failed to create L0 API client: %v", err)
 	}
-	logz.Info("Connected to Accumulate API v3 endpoint: %s", cfg.APIV3Endpoints[0])
+	logz.Info("Connected to Accumulate API v3 endpoint: %s", initialEndpoint)
 
-	// Create API v3 client for compatibility
-	apiClient, err := v3.New(cfg.APIV3Endpoints[0])
+	// Create API v3 client for compatibility using endpoint manager
+	apiClient, err := v3.New(initialEndpoint)
 	if err != nil {
 		logz.Fatal("Failed to create API v3 client: %v", err)
 	}

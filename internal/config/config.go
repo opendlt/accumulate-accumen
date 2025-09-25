@@ -10,11 +10,17 @@ import (
 
 // Config represents the Accumen configuration
 type Config struct {
-	APIV3Endpoints []string `yaml:"apiV3Endpoints"`
+	APIV3Endpoints []string `yaml:"apiV3Endpoints"` // DEPRECATED: use L0.Static instead
 	BlockTime      string   `yaml:"blockTime"`
 	AnchorEvery    string   `yaml:"anchorEvery"`
 	AnchorEveryN   int      `yaml:"anchorEveryBlocks"`
 	GasScheduleID  string   `yaml:"gasScheduleID"`
+	L0 struct {
+		Source string   `yaml:"source"`          // "proxy" | "static"
+		Proxy  string   `yaml:"proxy"`           // http(s)://...
+		Static []string `yaml:"apiV3Endpoints"`  // static endpoint list
+		WSPath string   `yaml:"wsPath"`          // WebSocket path, default "/ws"
+	} `yaml:"l0"`
 	DNPaths        struct {
 		Anchors string `yaml:"anchorsBase"`
 		TxMeta  string `yaml:"txBase"`
@@ -77,9 +83,33 @@ func Load(path string) (*Config, error) {
 
 // setDefaults sets default values for empty fields
 func (c *Config) setDefaults() error {
-	// Set default API endpoints if none provided
+	// Set default L0 configuration
+	if c.L0.Source == "" {
+		// Default to static if not specified
+		c.L0.Source = "static"
+	}
+	if c.L0.WSPath == "" {
+		c.L0.WSPath = "/ws"
+	}
+
+	// Handle legacy APIV3Endpoints field
+	if c.L0.Source == "static" && len(c.L0.Static) == 0 {
+		if len(c.APIV3Endpoints) > 0 {
+			// Migrate from legacy field
+			c.L0.Static = c.APIV3Endpoints
+		} else {
+			// Set default endpoints
+			c.L0.Static = []string{"https://mainnet.accumulatenetwork.io/v3"}
+		}
+	}
+
+	// Set default API endpoints for backward compatibility
 	if len(c.APIV3Endpoints) == 0 {
-		c.APIV3Endpoints = []string{"https://mainnet.accumulatenetwork.io/v3"}
+		if len(c.L0.Static) > 0 {
+			c.APIV3Endpoints = c.L0.Static
+		} else {
+			c.APIV3Endpoints = []string{"https://mainnet.accumulatenetwork.io/v3"}
+		}
 	}
 
 	// Set default block time if empty
@@ -167,7 +197,31 @@ func (c *Config) setDefaults() error {
 
 // validate performs basic validation of config values
 func (c *Config) validate() error {
-	// Validate API endpoints
+	// Validate L0 configuration
+	switch c.L0.Source {
+	case "proxy":
+		if c.L0.Proxy == "" {
+			return fmt.Errorf("l0.proxy must be specified when source is 'proxy'")
+		}
+	case "static":
+		if len(c.L0.Static) == 0 {
+			return fmt.Errorf("l0.static must contain at least one endpoint when source is 'static'")
+		}
+		for i, endpoint := range c.L0.Static {
+			if endpoint == "" {
+				return fmt.Errorf("l0.static endpoint %d cannot be empty", i)
+			}
+		}
+	default:
+		return fmt.Errorf("l0.source must be either 'proxy' or 'static', got: %s", c.L0.Source)
+	}
+
+	// Validate WebSocket path
+	if c.L0.WSPath == "" {
+		return fmt.Errorf("l0.wsPath cannot be empty")
+	}
+
+	// Validate legacy API endpoints for backward compatibility
 	if len(c.APIV3Endpoints) == 0 {
 		return fmt.Errorf("at least one API v3 endpoint must be specified")
 	}
