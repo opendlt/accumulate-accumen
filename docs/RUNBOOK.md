@@ -38,7 +38,51 @@ This will:
 --- PASS: TestAccumenSmoke (5.23s)
 ```
 
-### 2. Run Accumen L1 (Manual Mode)
+### 2. VDK Runner
+
+Accumen supports running with VDK (Validator Development Kit) for enhanced node lifecycle management and logging integration.
+
+#### Building with VDK Support
+
+Build the VDK-enabled binary with the appropriate build tag:
+
+```bash
+# Build VDK-enabled runner
+go build -tags=withvdk -o bin/accumen-vdk ./cmd/accumen-vdk
+```
+
+#### Running with VDK
+
+```bash
+# Start sequencer with VDK lifecycle management
+./bin/accumen-vdk \
+  --config=config/local.yaml \
+  --rpc=:8666 \
+  --metrics=:8667 \
+  --log-level=info
+```
+
+#### VDK Features
+
+- **Lifecycle Management**: VDK handles graceful startup and shutdown
+- **Logging Integration**: Automatic integration with VDK's structured logging
+- **Service Discovery**: VDK node registration and health reporting
+- **Monitoring**: Enhanced observability through VDK's monitoring framework
+
+#### Building without VDK
+
+If built without the `withvdk` tag, the binary will display a helpful error message:
+
+```bash
+# Standard build (no VDK)
+go build -o bin/accumen-vdk ./cmd/accumen-vdk
+
+# Running will show error
+./bin/accumen-vdk --config=config/local.yaml
+# Error: VDK support not available - this binary was built without -tags=withvdk
+```
+
+### 3. Run Accumen L1 (Manual Mode)
 
 For manual testing and development, start the Accumen sequencer separately:
 
