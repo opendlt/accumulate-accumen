@@ -81,6 +81,10 @@ deps:
 fmt:
 	$(GOCMD) fmt ./...
 
+# Run go vet
+vet:
+	$(GOCMD) vet ./...
+
 # Run linter (requires golangci-lint)
 lint:
 	golangci-lint run
@@ -89,6 +93,9 @@ lint:
 install-tools:
 	$(GOCMD) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
+# Build with formatting and vetting
+build-all: fmt vet build
+
 # Quick development targets
 dev: build run-sequencer
 
@@ -96,6 +103,7 @@ dev: build run-sequencer
 help:
 	@echo "Available targets:"
 	@echo "  build              Build the binary"
+	@echo "  build-all          Format, vet, and build"
 	@echo "  test               Run tests"
 	@echo "  run-sequencer      Run Accumen sequencer locally"
 	@echo "  run-sim            Setup/run Accumulate simulator"
@@ -108,6 +116,7 @@ help:
 	@echo "  clean              Clean build artifacts"
 	@echo "  deps               Download and tidy dependencies"
 	@echo "  fmt                Format code"
+	@echo "  vet                Run go vet"
 	@echo "  lint               Run linter"
 	@echo "  install-tools      Install development tools"
 	@echo "  dev                Build and run sequencer"
