@@ -8,7 +8,10 @@ import (
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
+
+	"github.com/opendlt/accumulate-accumen/internal/crypto/devsigner"
 )
 
 // Client represents an Accumulate L0 API v3 client
@@ -33,6 +36,8 @@ type ClientConfig struct {
 	UserAgent string
 	// Enable debug logging
 	Debug bool
+	// Sequencer private key for signing (hex-encoded, development only)
+	SequencerKey string
 }
 
 // DefaultClientConfig returns a default client configuration
@@ -298,4 +303,49 @@ func (c *Client) IsHealthy(ctx context.Context) error {
 	// Simple health check by querying network status
 	_, err := c.QueryNetworkStatus(ctx, &api.NetworkStatusQuery{})
 	return err
+}
+
+// SubmitEnvelope signs (if sequencer key present) and submits an envelope
+func (c *Client) SubmitEnvelope(ctx context.Context, env *build.EnvelopeBuilder) (string, error) {
+	if env == nil {
+		return "", fmt.Errorf("envelope cannot be nil")
+	}
+
+	// Sign envelope if sequencer key is configured
+	if c.config.SequencerKey != "" {
+		// Create development signer
+		signer, err := devsigner.NewFromHex(c.config.SequencerKey)
+		if err != nil {
+			return "", fmt.Errorf("failed to create signer from sequencer key: %w", err)
+		}
+
+		// Sign the envelope
+		if err := signer.Sign(env); err != nil {
+			return "", fmt.Errorf("failed to sign envelope: %w", err)
+		}
+	} else {
+		// TODO: In production, integrate with proper HSM or secure key management
+		// For now, return an error to indicate missing signing capability
+		return "", fmt.Errorf("TODO: no sequencer key configured - envelope signing not available. " +
+			"Either configure sequencerKey in config for development, or implement proper HSM integration")
+	}
+
+	// Build the final envelope
+	envelope, err := env.Done()
+	if err != nil {
+		return "", fmt.Errorf("failed to build envelope: %w", err)
+	}
+
+	// Submit to network
+	resp, err := c.Submit(ctx, envelope)
+	if err != nil {
+		return "", fmt.Errorf("failed to submit envelope: %w", err)
+	}
+
+	// Extract transaction ID from response
+	if len(resp.TransactionHash) == 0 {
+		return "", fmt.Errorf("no transaction hash returned from submission")
+	}
+
+	return resp.TransactionHash.String(), nil
 }

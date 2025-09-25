@@ -47,6 +47,25 @@ func NewQuerier(client *Client, config *QueryConfig) *Querier {
 	}
 }
 
+// NewQuerierFromURL creates a new querier from a JSON-RPC client URL
+func NewQuerierFromURL(clientURL string) (*Querier, error) {
+	if clientURL == "" {
+		return nil, fmt.Errorf("client URL cannot be empty")
+	}
+
+	// Create client configuration
+	clientConfig := DefaultClientConfig(clientURL)
+
+	// Create L0 API client
+	client, err := NewClient(clientConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create L0 API client: %w", err)
+	}
+
+	// Create querier with default config
+	return NewQuerier(client, nil), nil
+}
+
 // QueryAccount queries account information by URL
 func (q *Querier) QueryAccount(ctx context.Context, accountURL *url.URL) (*api.AccountRecord, error) {
 	if accountURL == nil {
@@ -203,7 +222,7 @@ func (q *Querier) QueryDataAccount(ctx context.Context, dataURL *url.URL) (*prot
 
 // QueryKeyBook queries key book information
 func (q *Querier) QueryKeyBook(ctx context.Context, keyBookURL *url.URL) (*protocol.KeyBook, error) {
-	record, err := q.QueryAccount(ctx, keyURL)
+	record, err := q.QueryAccount(ctx, keyBookURL)
 	if err != nil {
 		return nil, err
 	}
