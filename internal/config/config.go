@@ -36,6 +36,10 @@ type Config struct {
 		WaitForExecution bool   `yaml:"waitForExecution"` // Wait for transaction execution confirmation
 		Timeout          string `yaml:"timeout"`          // Timeout for execution confirmation (e.g., "30s")
 	} `yaml:"confirm"`
+	Snapshots struct {
+		EveryN int `yaml:"everyN"` // Take snapshot every N blocks (0 = disabled)
+		Retain int `yaml:"retain"` // Number of snapshots to retain (0 = keep all)
+	} `yaml:"snapshots"`
 	SequencerKey string `yaml:"sequencerKey"` // hex or base64, placeholder
 }
 
@@ -134,6 +138,14 @@ func (c *Config) setDefaults() error {
 		c.Confirm.Timeout = "30s"
 	}
 
+	// Set default snapshot configuration
+	if c.Snapshots.EveryN == 0 {
+		c.Snapshots.EveryN = 100 // Snapshot every 100 blocks by default
+	}
+	if c.Snapshots.Retain == 0 {
+		c.Snapshots.Retain = 5 // Keep 5 snapshots by default
+	}
+
 	return nil
 }
 
@@ -215,6 +227,14 @@ func (c *Config) validate() error {
 	// Validate confirmation configuration
 	if _, err := time.ParseDuration(c.Confirm.Timeout); err != nil {
 		return fmt.Errorf("invalid confirmation timeout %s: %w", c.Confirm.Timeout, err)
+	}
+
+	// Validate snapshot configuration
+	if c.Snapshots.EveryN < 0 {
+		return fmt.Errorf("snapshots everyN must be non-negative, got %d", c.Snapshots.EveryN)
+	}
+	if c.Snapshots.Retain < 0 {
+		return fmt.Errorf("snapshots retain must be non-negative, got %d", c.Snapshots.Retain)
 	}
 
 	return nil

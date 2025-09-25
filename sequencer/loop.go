@@ -6,6 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +18,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
+	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/internal/config"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/registry/dn"
@@ -24,6 +29,263 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 )
+
+// SnapshotManager handles periodic snapshots and restoration
+type SnapshotManager struct {
+	config      *config.Config
+	kvStore     state.KVStore
+	snapshotDir string
+	logger      *logz.Logger
+}
+
+// NewSnapshotManager creates a new snapshot manager
+func NewSnapshotManager(cfg *config.Config, kvStore state.KVStore) *SnapshotManager {
+	snapshotDir := filepath.Join(cfg.Storage.Path, "snapshots")
+
+	return &SnapshotManager{
+		config:      cfg,
+		kvStore:     kvStore,
+		snapshotDir: snapshotDir,
+		logger:      logz.New(logz.INFO, "snapshot"),
+	}
+}
+
+// ShouldTakeSnapshot returns true if a snapshot should be taken at the given height
+func (sm *SnapshotManager) ShouldTakeSnapshot(height uint64) bool {
+	if sm.config.Snapshots.EveryN <= 0 {
+		return false
+	}
+	return height > 0 && height%uint64(sm.config.Snapshots.EveryN) == 0
+}
+
+// TakeSnapshot creates a snapshot at the given height
+func (sm *SnapshotManager) TakeSnapshot(height uint64, appHash string) error {
+	if err := os.MkdirAll(sm.snapshotDir, 0755); err != nil {
+		return fmt.Errorf("failed to create snapshot directory: %w", err)
+	}
+
+	snapshotPath := filepath.Join(sm.snapshotDir, fmt.Sprintf("%d.snap", height))
+
+	// Create snapshot metadata
+	meta := &state.SnapshotMeta{
+		Height:  height,
+		Time:    time.Now().UTC(),
+		AppHash: appHash,
+	}
+
+	sm.logger.Info("Taking snapshot at height %d", height)
+	start := time.Now()
+
+	// Write the snapshot
+	if err := state.WriteSnapshot(snapshotPath, sm.kvStore, meta); err != nil {
+		// Clean up partial snapshot on failure
+		os.Remove(snapshotPath)
+		return fmt.Errorf("failed to write snapshot: %w", err)
+	}
+
+	duration := time.Since(start)
+	sm.logger.Info("Snapshot completed: height=%d, keys=%d, duration=%v, path=%s",
+		height, meta.NumKeys, duration, snapshotPath)
+
+	// Clean up old snapshots
+	if err := sm.cleanupOldSnapshots(); err != nil {
+		sm.logger.Info("Warning: failed to cleanup old snapshots: %v", err)
+	}
+
+	return nil
+}
+
+// RestoreFromSnapshot attempts to restore state from the latest snapshot
+func (sm *SnapshotManager) RestoreFromSnapshot() (*state.SnapshotMeta, error) {
+	// Check if KV store is empty first
+	isEmpty, err := sm.isKVStoreEmpty()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check if KV store is empty: %w", err)
+	}
+
+	if !isEmpty {
+		sm.logger.Info("KV store is not empty, skipping snapshot restore")
+		return nil, nil
+	}
+
+	// Find the latest snapshot
+	latestSnapshot, err := sm.findLatestSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("failed to find latest snapshot: %w", err)
+	}
+
+	if latestSnapshot == "" {
+		sm.logger.Info("No snapshots found, starting with empty state")
+		return nil, nil
+	}
+
+	sm.logger.Info("Restoring from snapshot: %s", latestSnapshot)
+	start := time.Now()
+
+	// Read the snapshot
+	meta, iterator, err := state.ReadSnapshot(latestSnapshot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read snapshot: %w", err)
+	}
+	defer iterator.Close()
+
+	// Restore key-value pairs
+	var restoredKeys uint64
+	for {
+		key, value, err := iterator.Next()
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			return nil, fmt.Errorf("failed to read snapshot entry: %w", err)
+		}
+
+		if err := sm.kvStore.Set(key, value); err != nil {
+			return nil, fmt.Errorf("failed to restore key-value pair: %w", err)
+		}
+
+		restoredKeys++
+	}
+
+	duration := time.Since(start)
+	sm.logger.Info("Snapshot restored: height=%d, keys=%d, duration=%v",
+		meta.Height, restoredKeys, duration)
+
+	return meta, nil
+}
+
+// GenerateAppHash generates an application hash for the current state
+func (sm *SnapshotManager) GenerateAppHash() (string, error) {
+	hasher := sha256.New()
+
+	// Iterate over all key-value pairs in sorted order for deterministic hash
+	var keys [][]byte
+	err := sm.kvStore.Iterate(func(key, value []byte) error {
+		keys = append(keys, append([]byte(nil), key...)) // Copy key
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to collect keys: %w", err)
+	}
+
+	// Sort keys for deterministic hashing
+	sort.Slice(keys, func(i, j int) bool {
+		return string(keys[i]) < string(keys[j])
+	})
+
+	// Hash each key-value pair
+	for _, key := range keys {
+		value, err := sm.kvStore.Get(key)
+		if err != nil {
+			return "", fmt.Errorf("failed to get value for key %s: %w", string(key), err)
+		}
+
+		hasher.Write(key)
+		hasher.Write(value)
+	}
+
+	return fmt.Sprintf("%x", hasher.Sum(nil)), nil
+}
+
+// isKVStoreEmpty checks if the KV store has any data
+func (sm *SnapshotManager) isKVStoreEmpty() (bool, error) {
+	isEmpty := true
+	err := sm.kvStore.Iterate(func(key, value []byte) error {
+		isEmpty = false
+		return fmt.Errorf("stop") // Stop iteration immediately
+	})
+
+	// If we got an error but it's our stop signal, the store is not empty
+	if err != nil && err.Error() == "stop" {
+		return false, nil
+	}
+
+	return isEmpty, err
+}
+
+// findLatestSnapshot finds the path to the latest snapshot file
+func (sm *SnapshotManager) findLatestSnapshot() (string, error) {
+	if _, err := os.Stat(sm.snapshotDir); os.IsNotExist(err) {
+		return "", nil
+	}
+
+	entries, err := os.ReadDir(sm.snapshotDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read snapshot directory: %w", err)
+	}
+
+	var snapshots []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".snap") {
+			snapshots = append(snapshots, entry.Name())
+		}
+	}
+
+	if len(snapshots) == 0 {
+		return "", nil
+	}
+
+	// Sort by height (filename is <height>.snap)
+	sort.Slice(snapshots, func(i, j int) bool {
+		// Extract height from filename
+		heightI := extractHeightFromFilename(snapshots[i])
+		heightJ := extractHeightFromFilename(snapshots[j])
+		return heightI > heightJ // Descending order (latest first)
+	})
+
+	return filepath.Join(sm.snapshotDir, snapshots[0]), nil
+}
+
+// cleanupOldSnapshots removes old snapshots beyond the retention limit
+func (sm *SnapshotManager) cleanupOldSnapshots() error {
+	if sm.config.Snapshots.Retain <= 0 {
+		return nil // No cleanup if retain is 0 or negative
+	}
+
+	entries, err := os.ReadDir(sm.snapshotDir)
+	if err != nil {
+		return fmt.Errorf("failed to read snapshot directory: %w", err)
+	}
+
+	var snapshots []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".snap") {
+			snapshots = append(snapshots, entry.Name())
+		}
+	}
+
+	if len(snapshots) <= sm.config.Snapshots.Retain {
+		return nil // No cleanup needed
+	}
+
+	// Sort by height (descending)
+	sort.Slice(snapshots, func(i, j int) bool {
+		heightI := extractHeightFromFilename(snapshots[i])
+		heightJ := extractHeightFromFilename(snapshots[j])
+		return heightI > heightJ
+	})
+
+	// Remove old snapshots beyond retention limit
+	for i := sm.config.Snapshots.Retain; i < len(snapshots); i++ {
+		snapshotPath := filepath.Join(sm.snapshotDir, snapshots[i])
+		if err := os.Remove(snapshotPath); err != nil {
+			sm.logger.Info("Warning: failed to remove old snapshot %s: %v", snapshotPath, err)
+		} else {
+			sm.logger.Debug("Removed old snapshot: %s", snapshotPath)
+		}
+	}
+
+	return nil
+}
+
+// extractHeightFromFilename extracts height from snapshot filename
+func extractHeightFromFilename(filename string) uint64 {
+	// Filename format is "<height>.snap"
+	name := strings.TrimSuffix(filename, ".snap")
+	var height uint64
+	fmt.Sscanf(name, "%d", &height)
+	return height
+}
 
 // SubmissionLoop manages the envelope submission pipeline
 type SubmissionLoop struct {
@@ -70,6 +332,9 @@ type Sequencer struct {
 	// Metadata and anchoring
 	metadataBuilder *json.MetadataBuilder
 	dnWriter        *anchors.DNWriter
+
+	// Snapshot management
+	snapshotManager *SnapshotManager
 
 	// State
 	running      bool
@@ -170,6 +435,13 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 	return sequencer, nil
 }
 
+// SetSnapshotManager sets the snapshot manager for the sequencer
+func (s *Sequencer) SetSnapshotManager(sm *SnapshotManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshotManager = sm
+}
+
 // Start starts the sequencer
 func (s *Sequencer) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -177,6 +449,18 @@ func (s *Sequencer) Start(ctx context.Context) error {
 
 	if s.running {
 		return fmt.Errorf("sequencer is already running")
+	}
+
+	// Attempt to restore from snapshot if snapshot manager is configured
+	if s.snapshotManager != nil {
+		restoredMeta, err := s.snapshotManager.RestoreFromSnapshot()
+		if err != nil {
+			return fmt.Errorf("failed to restore from snapshot: %w", err)
+		}
+		if restoredMeta != nil {
+			s.blockHeight = restoredMeta.Height
+			fmt.Printf("Restored sequencer state from snapshot at height %d\n", restoredMeta.Height)
+		}
 	}
 
 	s.running = true
@@ -300,6 +584,18 @@ func (s *Sequencer) produceBlock(ctx context.Context) {
 		// Check if it's time to write an anchor
 		if s.shouldWriteAnchor(block.Header.Height) {
 			s.writeAnchor(ctx, block)
+		}
+	}
+
+	// Check if we should take a snapshot
+	if s.snapshotManager != nil && s.snapshotManager.ShouldTakeSnapshot(block.Header.Height) {
+		appHash, err := s.snapshotManager.GenerateAppHash()
+		if err != nil {
+			fmt.Printf("Failed to generate app hash for snapshot: %v\n", err)
+		} else {
+			if err := s.snapshotManager.TakeSnapshot(block.Header.Height, appHash); err != nil {
+				fmt.Printf("Failed to take snapshot at height %d: %v\n", block.Header.Height, err)
+			}
 		}
 	}
 
