@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,7 +15,9 @@ import (
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 	"github.com/opendlt/accumulate-accumen/internal/config"
+	"github.com/opendlt/accumulate-accumen/internal/health"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
+	"github.com/opendlt/accumulate-accumen/internal/metrics"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 

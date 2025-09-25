@@ -13,6 +13,7 @@ import (
 
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
+	"github.com/opendlt/accumulate-accumen/follower/indexer"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 )
 
@@ -23,7 +24,10 @@ type Server struct {
 	sequencer     *sequencer.Sequencer
 	kvStore       state.KVStore
 	contractStore *contracts.Store
+	indexer       *indexer.Indexer
+	readOnly      bool
 	running       bool
+	stats         *ServerStats
 }
 
 // Dependencies holds the required dependencies for the RPC server
@@ -31,6 +35,12 @@ type Dependencies struct {
 	Sequencer     *sequencer.Sequencer
 	KVStore       state.KVStore
 	ContractStore *contracts.Store
+}
+
+// ReadOnlyDependencies holds dependencies for read-only (follower) mode
+type ReadOnlyDependencies struct {
+	KVStore state.KVStore
+	Indexer *indexer.Indexer
 }
 
 // Request represents a JSON-RPC request
@@ -103,13 +113,35 @@ type DeployContractResult struct {
 	WasmHash string `json:"wasm_hash"`
 }
 
+// ServerStats contains RPC server statistics
+type ServerStats struct {
+	mu           sync.RWMutex
+	RequestCount uint64        `json:"request_count"`
+	ErrorCount   uint64        `json:"error_count"`
+	Uptime       time.Duration `json:"uptime"`
+	StartTime    time.Time     `json:"start_time"`
+}
+
 // NewServer creates a new RPC server
 func NewServer(deps *Dependencies) *Server {
 	return &Server{
 		sequencer:     deps.Sequencer,
 		kvStore:       deps.KVStore,
 		contractStore: deps.ContractStore,
+		readOnly:      false,
 		running:       false,
+		stats:         &ServerStats{StartTime: time.Now()},
+	}
+}
+
+// NewReadOnlyServer creates a new read-only RPC server for followers
+func NewReadOnlyServer(deps *ReadOnlyDependencies) *Server {
+	return &Server{
+		kvStore:  deps.KVStore,
+		indexer:  deps.Indexer,
+		readOnly: true,
+		running:  false,
+		stats:    &ServerStats{StartTime: time.Now()},
 	}
 }
 
@@ -193,6 +225,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Track request
+	s.recordRequest()
+
 	// Route method
 	var result interface{}
 	var err *RPCError
@@ -200,14 +235,29 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case "accumen.status":
 		result, err = s.handleStatus()
-	case "accumen.submitTx":
-		result, err = s.handleSubmitTx(req.Params)
 	case "accumen.query":
 		result, err = s.handleQuery(req.Params)
+	case "accumen.getTx":
+		result, err = s.handleGetTx(req.Params)
+	case "accumen.submitTx":
+		if s.readOnly {
+			err = &RPCError{Code: -32601, Message: "Method not available in read-only mode"}
+		} else {
+			result, err = s.handleSubmitTx(req.Params)
+		}
 	case "accumen.deployContract":
-		result, err = s.handleDeployContract(req.Params)
+		if s.readOnly {
+			err = &RPCError{Code: -32601, Message: "Method not available in read-only mode"}
+		} else {
+			result, err = s.handleDeployContract(req.Params)
+		}
 	default:
 		err = &RPCError{Code: -32601, Message: "Method not found"}
+	}
+
+	// Track errors
+	if err != nil {
+		s.recordError()
 	}
 
 	// Write response
@@ -222,10 +272,18 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	var running bool
+	if s.readOnly {
+		running = s.indexer != nil
+	} else {
+		running = s.sequencer != nil && s.sequencer.IsRunning()
+	}
+
 	health := map[string]interface{}{
 		"status":    "healthy",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"running":   s.sequencer.IsRunning(),
+		"running":   running,
+		"mode":      s.getMode(),
 	}
 
 	json.NewEncoder(w).Encode(health)
@@ -233,6 +291,26 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleStatus handles accumen.status() method
 func (s *Server) handleStatus() (interface{}, *RPCError) {
+	if s.readOnly {
+		// Follower mode status
+		if s.indexer == nil {
+			return nil, &RPCError{Code: -32603, Message: "Indexer not available"}
+		}
+
+		indexerStats := s.indexer.GetStats()
+		result := &StatusResult{
+			ChainID:        "accumen-devnet-1", // TODO: get from config
+			Height:         indexerStats.CurrentHeight,
+			LastAnchorTime: nil, // Not applicable for followers
+			BlockTime:      "5s", // TODO: get from config
+			Running:        indexerStats.Running,
+			TxsProcessed:   indexerStats.EntriesProcessed,
+			Uptime:         time.Since(indexerStats.StartTime).String(),
+		}
+		return result, nil
+	}
+
+	// Sequencer mode status
 	if !s.sequencer.IsRunning() {
 		return nil, &RPCError{Code: -32603, Message: "Sequencer not running"}
 	}
@@ -341,12 +419,21 @@ func (s *Server) handleQuery(params interface{}) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32602, Message: "Missing required field: key"}
 	}
 
-	// Create state key (contract + key combination)
-	stateKey := fmt.Sprintf("%s:%s", queryParams.Contract, queryParams.Key)
+	var value []byte
+	var exists bool
 
-	// Query from state store
-	value, err_kv := s.kvStore.Get(stateKey)
-	exists := err_kv == nil
+	if s.readOnly && s.indexer != nil {
+		// Query via indexer for follower mode
+		var queryErr error
+		value, queryErr = s.indexer.QueryContractState(queryParams.Contract, queryParams.Key)
+		exists = queryErr == nil
+	} else {
+		// Query from state store (sequencer mode)
+		stateKey := fmt.Sprintf("state:%s:%s", queryParams.Contract, queryParams.Key)
+		var queryErr error
+		value, queryErr = s.kvStore.Get([]byte(stateKey))
+		exists = queryErr == nil
+	}
 
 	var valueStr *string
 	if exists && len(value) > 0 {
@@ -362,6 +449,52 @@ func (s *Server) handleQuery(params interface{}) (interface{}, *RPCError) {
 	}
 
 	return result, nil
+}
+
+// GetTxParams represents parameters for accumen.getTx()
+type GetTxParams struct {
+	TxHash string `json:"txHash"`
+}
+
+// handleGetTx handles accumen.getTx() method
+func (s *Server) handleGetTx(params interface{}) (interface{}, *RPCError) {
+	// Parse parameters
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+	}
+
+	var getTxParams GetTxParams
+	if err := json.Unmarshal(paramsBytes, &getTxParams); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
+	}
+
+	// Validate required fields
+	if getTxParams.TxHash == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: txHash"}
+	}
+
+	if s.readOnly && s.indexer != nil {
+		// Query via indexer for follower mode
+		entry, err := s.indexer.QueryTransaction(getTxParams.TxHash)
+		if err != nil {
+			return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Transaction not found: %v", err)}
+		}
+		return entry, nil
+	} else {
+		// Query from KV store (sequencer mode)
+		txKey := fmt.Sprintf("tx:%s", getTxParams.TxHash)
+		data, err := s.kvStore.Get([]byte(txKey))
+		if err != nil {
+			return nil, &RPCError{Code: -32603, Message: "Transaction not found"}
+		}
+
+		// Return raw transaction data as hex
+		return map[string]interface{}{
+			"txHash": getTxParams.TxHash,
+			"data":   hex.EncodeToString(data),
+		}, nil
+	}
 }
 
 // handleDeployContract handles accumen.deployContract() method
@@ -505,4 +638,36 @@ func (s *Server) validateJSONRPC(req *Request) *RPCError {
 	}
 
 	return nil
+}
+
+// getMode returns the server mode
+func (s *Server) getMode() string {
+	if s.readOnly {
+		return "follower"
+	}
+	return "sequencer"
+}
+
+// recordRequest increments the request counter
+func (s *Server) recordRequest() {
+	s.stats.mu.Lock()
+	defer s.stats.mu.Unlock()
+	s.stats.RequestCount++
+}
+
+// recordError increments the error counter
+func (s *Server) recordError() {
+	s.stats.mu.Lock()
+	defer s.stats.mu.Unlock()
+	s.stats.ErrorCount++
+}
+
+// GetStats returns server statistics
+func (s *Server) GetStats() *ServerStats {
+	s.stats.mu.RLock()
+	defer s.stats.mu.RUnlock()
+
+	statsCopy := *s.stats
+	statsCopy.Uptime = time.Since(s.stats.StartTime)
+	return &statsCopy
 }
