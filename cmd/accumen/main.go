@@ -11,10 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 	"github.com/opendlt/accumulate-accumen/internal/config"
+	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 	"github.com/opendlt/accumulate-accumen/internal/health"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/internal/metrics"
@@ -68,12 +70,30 @@ func main() {
 	// Start metrics server
 	go startMetricsServer(*metricsAddr)
 
-	// Create API v3 client
-	apiClient, err := v3.New(cfg.APIV3Endpoints[0]) // Use first endpoint for now
+	// Create signer from configuration
+	signerConfig := &signer.SignerConfig{
+		Type: cfg.Signer.Type,
+		Key:  cfg.Signer.Key,
+	}
+	nodeSigner, err := signer.NewFromConfig(signerConfig, cfg.SequencerKey)
+	if err != nil {
+		logz.Fatal("Failed to create signer: %v", err)
+	}
+	logz.Info("Signer initialized: type=%s", cfg.Signer.Type)
+
+	// Create L0 API client with signer
+	l0ClientConfig := l0api.DefaultClientConfig(cfg.APIV3Endpoints[0])
+	l0Client, err := l0api.NewClientWithSigner(l0ClientConfig, nodeSigner)
+	if err != nil {
+		logz.Fatal("Failed to create L0 API client: %v", err)
+	}
+	logz.Info("Connected to Accumulate API v3 endpoint: %s", cfg.APIV3Endpoints[0])
+
+	// Create API v3 client for compatibility
+	apiClient, err := v3.New(cfg.APIV3Endpoints[0])
 	if err != nil {
 		logz.Fatal("Failed to create API v3 client: %v", err)
 	}
-	logz.Info("Connected to Accumulate API v3 endpoint: %s", cfg.APIV3Endpoints[0])
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -92,7 +112,7 @@ func main() {
 	// Run the node based on role
 	switch *role {
 	case "sequencer":
-		if err := runSequencer(ctx, cfg, apiClient); err != nil {
+		if err := runSequencer(ctx, cfg, apiClient, l0Client, nodeSigner); err != nil {
 			logz.Fatal("Sequencer failed: %v", err)
 		}
 	case "follower":
@@ -157,7 +177,7 @@ func recordSequencerMetrics(ctx context.Context, seq *sequencer.Sequencer, logge
 }
 
 // runSequencer runs the node in sequencer mode
-func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client) error {
+func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client, l0Client *l0api.Client, nodeSigner signer.Signer) error {
 	logger := logz.New(logz.INFO, "sequencer")
 	logger.Info("Initializing Accumen sequencer...")
 
@@ -222,6 +242,7 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 	logger.Info("DN paths - Anchors: %s, TxMeta: %s", cfg.DNPaths.Anchors, cfg.DNPaths.TxMeta)
 	logger.Info("Storage: backend=%s, path=%s", cfg.Storage.Backend, cfg.Storage.Path)
 	logger.Info("Confirmation settings: waitForExecution=%v, timeout=%s", cfg.Confirm.WaitForExecution, cfg.Confirm.Timeout)
+	logger.Info("Signer: type=%s", cfg.Signer.Type)
 
 	// Start periodic metrics recording
 	go recordSequencerMetrics(ctx, seq, logger)

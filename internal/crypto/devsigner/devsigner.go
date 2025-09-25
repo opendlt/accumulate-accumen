@@ -5,26 +5,39 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/address"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/encoding"
 )
 
 // WARNING: This is a development-only signer implementation.
+// DEPRECATED: Use internal/crypto/signer package instead.
+// This package is maintained for backward compatibility only.
 // In production, this should be replaced with proper HSM or secure key management.
 // DO NOT USE IN PRODUCTION - private keys are stored in memory.
 
 // Signer provides ed25519 signing capabilities for development purposes
+// DEPRECATED: Use signer.DevKeySigner instead
 type Signer struct {
 	privateKey ed25519.PrivateKey
 	publicKey  ed25519.PublicKey
 	keyHash    []byte
+	// Embed new signer for forward compatibility
+	newSigner signer.Signer
 }
 
 // NewFromHex creates a new development signer from a hex-encoded private key
+// DEPRECATED: Use signer.NewDevKeySignerFromKey instead
 func NewFromHex(hexKey string) (*Signer, error) {
 	if hexKey == "" {
 		return nil, fmt.Errorf("private key cannot be empty")
+	}
+
+	// Create new signer using the updated interface
+	newSigner, err := signer.NewDevKeySignerFromKey(hexKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new signer: %w", err)
 	}
 
 	// Remove 0x prefix if present
@@ -58,13 +71,19 @@ func NewFromHex(hexKey string) (*Signer, error) {
 	// Calculate key hash for Accumulate addressing
 	keyHash := address.FromED25519PublicKey(publicKey)
 
-	signer := &Signer{
+	legacySigner := &Signer{
 		privateKey: privateKey,
 		publicKey:  publicKey,
 		keyHash:    keyHash,
+		newSigner:  newSigner,
 	}
 
-	return signer, nil
+	return legacySigner, nil
+}
+
+// AsNewSigner returns the new signer interface for forward compatibility
+func (s *Signer) AsNewSigner() signer.Signer {
+	return s.newSigner
 }
 
 // Sign signs an envelope using the ed25519 private key

@@ -12,6 +12,7 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 
 	"github.com/opendlt/accumulate-accumen/internal/crypto/devsigner"
+	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 )
 
 // Client represents an Accumulate L0 API v3 client
@@ -20,6 +21,7 @@ type Client struct {
 	client   api.Querier
 	submitter api.Submitter
 	config   *ClientConfig
+	signer   signer.Signer
 }
 
 // ClientConfig defines configuration for the L0 API client
@@ -36,7 +38,8 @@ type ClientConfig struct {
 	UserAgent string
 	// Enable debug logging
 	Debug bool
-	// Sequencer private key for signing (hex-encoded, development only)
+	// DEPRECATED: Sequencer private key for signing (hex-encoded, development only)
+	// Use signer parameter in NewClient instead
 	SequencerKey string
 }
 
@@ -54,6 +57,11 @@ func DefaultClientConfig(endpoint string) *ClientConfig {
 
 // NewClient creates a new Accumulate L0 API client
 func NewClient(config *ClientConfig) (*Client, error) {
+	return NewClientWithSigner(config, nil)
+}
+
+// NewClientWithSigner creates a new Accumulate L0 API client with a signer
+func NewClientWithSigner(config *ClientConfig, sig signer.Signer) (*Client, error) {
 	if config == nil {
 		return nil, fmt.Errorf("client config cannot be nil")
 	}
@@ -70,11 +78,21 @@ func NewClient(config *ClientConfig) (*Client, error) {
 	// Create JSON-RPC client
 	rpcClient := jsonrpc.NewClient(config.Endpoint, jsonrpc.WithHTTPClient(httpClient))
 
+	// If no signer provided but SequencerKey is set, create legacy signer for backward compatibility
+	if sig == nil && config.SequencerKey != "" {
+		legacySigner, err := devsigner.NewFromHex(config.SequencerKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create legacy signer from SequencerKey: %w", err)
+		}
+		sig = legacySigner.AsNewSigner()
+	}
+
 	return &Client{
 		endpoint:  config.Endpoint,
 		client:    rpcClient,
 		submitter: rpcClient,
 		config:    config,
+		signer:    sig,
 	}, nil
 }
 
@@ -305,29 +323,36 @@ func (c *Client) IsHealthy(ctx context.Context) error {
 	return err
 }
 
-// SubmitEnvelope signs (if sequencer key present) and submits an envelope
+// SubmitEnvelope signs (if signer present) and submits an envelope
 func (c *Client) SubmitEnvelope(ctx context.Context, env *build.EnvelopeBuilder) (string, error) {
 	if env == nil {
 		return "", fmt.Errorf("envelope cannot be nil")
 	}
 
-	// Sign envelope if sequencer key is configured
-	if c.config.SequencerKey != "" {
-		// Create development signer
-		signer, err := devsigner.NewFromHex(c.config.SequencerKey)
-		if err != nil {
-			return "", fmt.Errorf("failed to create signer from sequencer key: %w", err)
-		}
-
-		// Sign the envelope
-		if err := signer.Sign(env); err != nil {
+	// Sign envelope if signer is configured
+	if c.signer != nil {
+		// Sign the envelope using the configured signer
+		if err := c.signer.SignEnvelope(env); err != nil {
 			return "", fmt.Errorf("failed to sign envelope: %w", err)
 		}
 	} else {
-		// TODO: In production, integrate with proper HSM or secure key management
-		// For now, return an error to indicate missing signing capability
-		return "", fmt.Errorf("TODO: no sequencer key configured - envelope signing not available. " +
-			"Either configure sequencerKey in config for development, or implement proper HSM integration")
+		// Check for legacy sequencer key configuration
+		if c.config.SequencerKey != "" {
+			// Create legacy development signer for backward compatibility
+			legacySigner, err := devsigner.NewFromHex(c.config.SequencerKey)
+			if err != nil {
+				return "", fmt.Errorf("failed to create legacy signer from sequencer key: %w", err)
+			}
+
+			// Sign the envelope
+			if err := legacySigner.Sign(env); err != nil {
+				return "", fmt.Errorf("failed to sign envelope with legacy signer: %w", err)
+			}
+		} else {
+			// No signing capability available
+			return "", fmt.Errorf("no signer configured - envelope signing not available. " +
+				"Either configure a signer via NewClientWithSigner or set sequencerKey in config for legacy support")
+		}
 	}
 
 	// Build the final envelope

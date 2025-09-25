@@ -40,7 +40,11 @@ type Config struct {
 		EveryN int `yaml:"everyN"` // Take snapshot every N blocks (0 = disabled)
 		Retain int `yaml:"retain"` // Number of snapshots to retain (0 = keep all)
 	} `yaml:"snapshots"`
-	SequencerKey string `yaml:"sequencerKey"` // hex or base64, placeholder
+	Signer struct {
+		Type string `yaml:"type"` // "file" | "env" | "dev"
+		Key  string `yaml:"key"`  // path or env name or raw key (dev only)
+	} `yaml:"signer"`
+	SequencerKey string `yaml:"sequencerKey"` // DEPRECATED: hex or base64, use Signer instead
 }
 
 // Load reads and parses a YAML configuration file
@@ -146,6 +150,18 @@ func (c *Config) setDefaults() error {
 		c.Snapshots.Retain = 5 // Keep 5 snapshots by default
 	}
 
+	// Set default signer configuration
+	if c.Signer.Type == "" {
+		// If legacy SequencerKey is provided, use dev signer
+		if c.SequencerKey != "" {
+			c.Signer.Type = "dev"
+			c.Signer.Key = c.SequencerKey
+		} else {
+			// Default to dev signer with generated key
+			c.Signer.Type = "dev"
+		}
+	}
+
 	return nil
 }
 
@@ -235,6 +251,24 @@ func (c *Config) validate() error {
 	}
 	if c.Snapshots.Retain < 0 {
 		return fmt.Errorf("snapshots retain must be non-negative, got %d", c.Snapshots.Retain)
+	}
+
+	// Validate signer configuration
+	if c.Signer.Type != "" {
+		switch c.Signer.Type {
+		case "file":
+			if c.Signer.Key == "" {
+				return fmt.Errorf("file signer requires key path")
+			}
+		case "env":
+			if c.Signer.Key == "" {
+				return fmt.Errorf("env signer requires environment variable name")
+			}
+		case "dev":
+			// Key is optional for dev signer (will generate if empty)
+		default:
+			return fmt.Errorf("unsupported signer type: %s (must be 'file', 'env', or 'dev')", c.Signer.Type)
+		}
 	}
 
 	return nil
