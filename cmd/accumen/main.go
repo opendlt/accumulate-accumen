@@ -9,8 +9,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/internal/config"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
+	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
@@ -20,6 +22,7 @@ var (
 	role       = flag.String("role", "sequencer", "Node role: sequencer or follower")
 	configPath = flag.String("config", "", "Path to configuration file")
 	logLevel   = flag.String("log-level", "info", "Log level: debug, info, warn, error")
+	rpcAddr    = flag.String("rpc", ":8666", "RPC server address (default :8666)")
 )
 
 func main() {
@@ -122,6 +125,24 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 	logger.Info("Gas schedule ID: %s", cfg.GasScheduleID)
 	logger.Info("DN paths - Anchors: %s, TxMeta: %s", cfg.DNPaths.Anchors, cfg.DNPaths.TxMeta)
 
+	// Start RPC server if address is provided
+	var rpcServer *rpc.Server
+	if *rpcAddr != "" {
+		// Create a simple KV store for queries (in production this would be the actual state store)
+		kvStore := state.NewMemoryKVStore()
+
+		rpcServer = rpc.NewServer(&rpc.Dependencies{
+			Sequencer: seq,
+			KVStore:   kvStore,
+		})
+
+		if err := rpcServer.Start(*rpcAddr); err != nil {
+			logger.Info("Warning: Failed to start RPC server: %v", err)
+		} else {
+			logger.Info("RPC server started on %s", *rpcAddr)
+		}
+	}
+
 	// Wait for shutdown signal
 	<-ctx.Done()
 
@@ -129,6 +150,16 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
+	// Stop RPC server first
+	if rpcServer != nil {
+		if err := rpcServer.Stop(shutdownCtx); err != nil {
+			logger.Info("Warning: Failed to stop RPC server: %v", err)
+		} else {
+			logger.Info("RPC server stopped")
+		}
+	}
+
+	// Stop sequencer
 	if err := seq.Stop(shutdownCtx); err != nil {
 		return fmt.Errorf("failed to stop sequencer: %w", err)
 	}
@@ -152,6 +183,17 @@ func runFollower(ctx context.Context, cfg *config.Config, apiClient *v3.Client) 
 	logger.Info("Block time: %v, Anchor every: %v (%d blocks)",
 		cfg.GetBlockTimeDuration(), cfg.GetAnchorIntervalDuration(), cfg.AnchorEveryN)
 
+	// Start RPC server for followers too (read-only mode)
+	var rpcServer *rpc.Server
+	if *rpcAddr != "" {
+		// Create a simple KV store for queries (in follower mode, this would sync from sequencer)
+		kvStore := state.NewMemoryKVStore()
+
+		// For followers, we don't have a sequencer, so we'll need to modify the RPC server
+		// For now, we'll skip RPC server for followers
+		logger.Info("RPC server disabled for follower mode (not yet implemented)")
+	}
+
 	// Placeholder follower loop
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -160,6 +202,14 @@ func runFollower(ctx context.Context, cfg *config.Config, apiClient *v3.Client) 
 		select {
 		case <-ctx.Done():
 			logger.Info("Follower shutdown requested")
+
+			// Stop RPC server if running
+			if rpcServer != nil {
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer shutdownCancel()
+				rpcServer.Stop(shutdownCtx)
+			}
+
 			return nil
 		case <-ticker.C:
 			// TODO: Implement follower sync logic
