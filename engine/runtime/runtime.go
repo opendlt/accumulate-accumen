@@ -17,25 +17,32 @@ type Runtime struct {
 	wazeroRuntime wazero.Runtime
 	compiledModule wazero.CompiledModule
 	hostAPI       *host.API
-	config        *Config
+	config        *RuntimeConfig
+	moduleCache   *ModuleCache
 }
 
-// Config defines runtime configuration
-type Config struct {
+// RuntimeConfig defines runtime configuration (renamed from Config to avoid conflicts)
+type RuntimeConfig struct {
 	// Maximum memory pages (64KB each)
 	MaxMemoryPages uint32
 	// Gas limit per execution
 	GasLimit uint64
 	// Enable debug mode
 	Debug bool
+	// Cache size for compiled modules
+	CacheSize int
 }
+
+// Config is an alias for backward compatibility
+type Config = RuntimeConfig
 
 // DefaultConfig returns a default runtime configuration
 func DefaultConfig() *Config {
 	return &Config{
-		MaxMemoryPages: 16,    // 1MB max memory
+		MaxMemoryPages: 16,      // 1MB max memory
 		GasLimit:       1000000, // 1M gas units
 		Debug:          false,
+		CacheSize:      16,      // 16 compiled modules in cache
 	}
 }
 
@@ -91,45 +98,180 @@ type ExecutionResult struct {
 }
 
 // NewRuntime creates a new AccuWASM runtime instance
-func NewRuntime(config *Config) (*Runtime, error) {
+func NewRuntime(config *RuntimeConfig) (*Runtime, error) {
 	if config == nil {
 		config = DefaultConfig()
 	}
 
 	ctx := context.Background()
 
-	// Create wazero runtime with deterministic configuration
+	// Create wazero runtime with strict deterministic configuration
 	runtimeConfig := wazero.NewRuntimeConfig().
-		// Disable all non-deterministic features
-		WithFeatureSignExtensionOps(false).
-		WithFeatureBulkMemoryOperations(false).
-		WithFeatureReferenceTypes(false).
-		WithFeatureSIMD(false).
-		WithFeatureMultiValue(false).
-		WithDebugInfoEnabled(config.Debug)
+		// Disable all non-deterministic features for strict determinism
+		WithFeatureSignExtensionOps(false).       // No sign extension ops
+		WithFeatureBulkMemoryOperations(false).   // No bulk memory operations
+		WithFeatureReferenceTypes(false).         // No reference types
+		WithFeatureSIMD(false).                   // No SIMD operations
+		WithFeatureMultiValue(false).             // No multi-value returns
+		WithFeatureMutableGlobals(false).         // No mutable globals
+		WithDebugInfoEnabled(config.Debug).
+		// Enable strict deterministic execution
+		WithCoreFeatures(wazero.CoreFeaturesV1) // Use only WASM 1.0 core features
 
-	wazeRuntime := wazero.NewRuntimeWithConfig(ctx, runtimeConfig)
+	wazeroRuntime := wazero.NewRuntimeWithConfig(ctx, runtimeConfig)
 
 	// Instantiate minimal WASI (no actual system calls)
-	if _, err := wasi_snapshot_preview1.Instantiate(ctx, wazeRuntime); err != nil {
-		return &Runtime{}, fmt.Errorf("failed to instantiate WASI: %w", err)
+	if _, err := wasi_snapshot_preview1.Instantiate(ctx, wazeroRuntime); err != nil {
+		wazeroRuntime.Close(ctx)
+		return nil, fmt.Errorf("failed to instantiate WASI: %w", err)
 	}
 
+	// Create module cache
+	moduleCache := NewModuleCache(config.CacheSize, wazeroRuntime, config)
+
 	return &Runtime{
-		wazeroRuntime: wazeRuntime,
+		wazeroRuntime: wazeroRuntime,
 		config:        config,
+		moduleCache:   moduleCache,
 	}, nil
 }
 
-// LoadModule compiles and loads a WASM module
+// LoadModule compiles and loads a WASM module (deprecated - use ExecuteContract instead)
 func (r *Runtime) LoadModule(ctx context.Context, wasmBytes []byte) error {
-	compiled, err := r.wazeroRuntime.CompileModule(ctx, wasmBytes)
+	prepared, _, err := r.moduleCache.Prepare(wasmBytes)
 	if err != nil {
-		return fmt.Errorf("failed to compile WASM module: %w", err)
+		return fmt.Errorf("failed to prepare WASM module: %w", err)
 	}
 
-	r.compiledModule = compiled
+	r.compiledModule = prepared.Module
 	return nil
+}
+
+// ExecuteContract executes a WASM contract with caching and validation
+func (r *Runtime) ExecuteContract(ctx context.Context, wasmBytes []byte, wasmHash []byte, functionName string, params []uint64, kvStore state.KVStore) (*ExecutionResult, error) {
+	// Convert hash to [32]byte
+	var hash [32]byte
+	copy(hash[:], wasmHash)
+
+	// Try to get from cache first
+	prepared, found := r.moduleCache.Get(hash)
+	if !found {
+		// Prepare and cache the module
+		var err error
+		prepared, hash, err = r.moduleCache.Prepare(wasmBytes)
+		if err != nil {
+			return &ExecutionResult{
+				Success: false,
+				Error:   fmt.Errorf("failed to prepare WASM module: %w", err),
+			}, nil
+		}
+
+		// Store in cache
+		r.moduleCache.Put(hash, prepared)
+	}
+
+	// Validate module metadata
+	if !prepared.Metadata.IsValid {
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Errorf("module validation failed: %s", prepared.Metadata.ValidationError),
+		}, nil
+	}
+
+	// Create gas meter
+	gasMeter := gas.NewMeter(gas.GasLimit(r.config.GasLimit))
+
+	// Create host API
+	r.hostAPI = host.NewAPI(gasMeter, kvStore)
+
+	// Create execution context
+	execContext := NewExecutionContext()
+
+	// Register host bindings
+	hostModuleBuilder := r.wazeroRuntime.NewHostModuleBuilder("accuwasm_host")
+	if err := RegisterHostBindings(ctx, hostModuleBuilder, r.hostAPI, gasMeter, execContext); err != nil {
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to register host bindings: %w", err),
+		}, nil
+	}
+
+	// Instantiate the host module
+	if _, err := hostModuleBuilder.Instantiate(ctx); err != nil {
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to instantiate host module: %w", err),
+		}, nil
+	}
+
+	// Configure module with strict deterministic settings
+	moduleConfig := wazero.NewModuleConfig().
+		WithArgs("accuwasm").
+		WithStdin(nil).   // No stdin access
+		WithStdout(nil).  // No stdout access
+		WithStderr(nil).  // No stderr access
+		WithSysWalltime(func() (sec int64, nsec int32) { return 0, 0 }). // Fixed time
+		WithSysNanotime(func() int64 { return 0 }). // Fixed time
+		WithRandSource(nil). // No random source
+		// Limit memory strictly
+		WithMemoryLimitPages(prepared.Metadata.MaxMemoryPages)
+
+	// Instantiate module with the prepared compiled module
+	module, err := r.wazeroRuntime.InstantiateModule(ctx, prepared.Module, moduleConfig)
+	if err != nil {
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Errorf("failed to instantiate module: %w", err),
+		}, nil
+	}
+	defer module.Close(ctx)
+
+	// Get the function to execute
+	fn := module.ExportedFunction(functionName)
+	if fn == nil {
+		return &ExecutionResult{
+			Success: false,
+			Error:   fmt.Errorf("function %s not found in module exports: %v", functionName, prepared.Metadata.Exports),
+		}, nil
+	}
+
+	// Execute the function with gas metering
+	results, err := fn.Call(ctx, params...)
+
+	gasUsed := gasMeter.GasConsumed()
+
+	if err != nil {
+		return &ExecutionResult{
+			Success: false,
+			GasUsed: gasUsed,
+			Error:   fmt.Errorf("execution failed: %w", err),
+		}, nil
+	}
+
+	// Convert results to bytes (simplified)
+	var returnValue []byte
+	if len(results) > 0 {
+		returnValue = []byte(fmt.Sprintf("%d", results[0]))
+	}
+
+	// Create execution receipt with module information
+	receipt := &state.Receipt{
+		Success:      true,
+		GasUsed:      gasUsed,
+		GasLimit:     r.config.GasLimit,
+		FunctionName: functionName,
+		ReturnValue:  returnValue,
+		ModuleHash:   hash[:],
+	}
+
+	return &ExecutionResult{
+		Success:     true,
+		ReturnValue: returnValue,
+		GasUsed:     gasUsed,
+		Receipt:     receipt,
+		StagedOps:   execContext.GetStagedOps(),
+		Events:      execContext.GetEvents(),
+	}, nil
 }
 
 // Execute runs a WASM function with the given parameters
@@ -232,10 +374,24 @@ func (r *Runtime) Execute(ctx context.Context, functionName string, params []uin
 
 // Close releases runtime resources
 func (r *Runtime) Close(ctx context.Context) error {
+	// Clear module cache first
+	if r.moduleCache != nil {
+		r.moduleCache.Clear()
+	}
+
+	// Close wazero runtime
 	if r.wazeroRuntime != nil {
 		return r.wazeroRuntime.Close(ctx)
 	}
 	return nil
+}
+
+// GetCacheStats returns module cache statistics
+func (r *Runtime) GetCacheStats() CacheStats {
+	if r.moduleCache != nil {
+		return r.moduleCache.GetStats()
+	}
+	return CacheStats{}
 }
 
 // GetMemoryUsage returns current memory usage statistics
