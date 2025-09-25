@@ -1,59 +1,163 @@
-# CLAUDE.md — Accumen Orchestration (Local Windows Setup)
+# Claude Code Development Notes
 
-This doc tells Claude Code **exactly how to write files locally** to `C:\Dev\accumulate-accumen`.  
-You will commit between prompts yourself.
+This file contains development notes and commands for working on the Accumen project with Claude Code.
 
----
+## Project Structure
 
-## Prereqs
-
-- Windows PowerShell (recommended).
-- Your local directories:
-  - **Write target** (repo root): `C:\Dev\accumulate-accumen`
-  - Accumulate official repo (read-only reference): `C:\Accumulate_Stuff\accumulate`
-  - Accumulate VDK (read-only reference): `C:\Accumulate_Stuff\accumulate\vdk`
-  - Optional TS client (read-only reference): `C:\Accumulate_Stuff\accumulate-javascript-client`
-
-> We are **not** wiring Ledger support nor incomplete SDKs.  
-> For SDKs, use the **TypeScript** and **Go** SDKs in the official Accumulate repo.
-
----
-
-## How to run Claude Code (local)
-
-Run this **every time** you paste one of the prompts from the *Sequence* section:
-
-```powershell
-claude --ide `
-  --allowed-tools "Bash(dart*|pwsh*|powershell*|cmake*|ninja*|git*|where*|cmd*|dumpbin*), Read, Write, Edit" `
-  --add-dir "C:\Dev\accumulate-accumen" `
-  --add-dir "C:\Accumulate_Stuff\accumulate" `
-  --add-dir "C:\Accumulate_Stuff\accumulate\vdk" `
-  --add-dir "C:\Accumulate_Stuff\accumulate-javascript-client" `
-  --permission-mode acceptEdits
-````
-
-### Important
-
-* The first `--add-dir` is the **write target**. All file paths in prompts are **relative to this directory**.
-* Other `--add-dir`s are for **reading/reference only**.
-* **You commit between prompts.**
-
----
-
-## Filesystem Contract (read this to Claude in each prompt)
-
-* You **MUST** use the **Write** tool to create or overwrite files under the first `--add-dir` (`C:\Dev\accumulate-accumen`).
-* Merely printing fenced code blocks is not sufficient.
-* All file paths are **relative to the first `--add-dir`**. Do **not** use absolute drive paths.
-* Use **forward slashes** in paths (Windows accepts them in repos).
-* One fenced block per file: use code fences with the **file path as the language tag**:
-
-````text
-```path/to/file.ext
-// file content
-````
+Accumen is a Go-based Layer 1 sequencer with WASM execution capabilities and Accumulate L0 network integration.
 
 ```
-- After generating the fenced blocks, **apply them to disk via the Write tool**.  
-- If Write fails, retry or report the exact error.
+accumulate-accumen/
+├── cmd/accumen/           # Main application entry point
+├── sequencer/             # Core sequencer logic
+├── engine/                # WASM execution engine
+├── bridge/                # Accumulate L0 bridge integration
+├── registry/              # Directory Network client
+├── types/                 # Type definitions and code generation
+├── sdk/rust/              # Rust SDK for contract development
+├── tests/                 # Integration and E2E tests
+├── config/                # Configuration files
+├── docs/                  # Documentation
+└── ops/                   # Build and deployment scripts
+```
+
+## Build Commands
+
+### Development Build
+```bash
+make build
+```
+
+### Production Build
+```bash
+make build-release
+```
+
+### Run Sequencer (Local Development)
+```bash
+make run-sequencer
+```
+This uses `config/local.yaml` for local development settings.
+
+### Run Tests
+```bash
+make test
+make test-integration
+make test-e2e
+```
+
+### Code Generation
+```bash
+# Generate Go types from protobuf
+make proto
+
+# Generate Go types from JSON schemas
+make json
+
+# Generate both
+make generate
+```
+
+## Development Workflow
+
+1. **Local Development**: Use `make run-sequencer` with `config/local.yaml`
+2. **Testing**: Run `make test` for unit tests, `make test-integration` for integration tests
+3. **Code Generation**: Run `make generate` after modifying schemas or proto files
+4. **Build**: Use `make build` for development builds
+
+## Key Components
+
+### Sequencer (`sequencer/`)
+- `loop.go` - Main sequencer orchestration
+- `mempool.go` - Transaction pool management
+- `exec.go` - Transaction execution engine
+- `config.go` - Configuration management
+
+### WASM Engine (`engine/`)
+- `runtime/runtime.go` - WASM runtime wrapper
+- `runtime/host_bindings.go` - Host function bindings
+- `host/abi.go` - Host API implementation
+- `gas/meter.go` - Gas consumption tracking
+- `state/` - State management and receipts
+
+### Bridge (`bridge/`)
+- `l0api/` - Accumulate L0 API client
+- `outputs/` - Output staging and submission
+- `anchors/` - DN anchor writing
+- `pricing/` - Credit pricing system
+
+### Types (`types/`)
+- `json/` - JSON schema and metadata building
+- `proto/` - Protocol buffer definitions
+- Code generation tools in `tools/`
+
+## Configuration
+
+- `config/local.yaml` - Local development (default for `make run-sequencer`)
+- Bridge disabled by default for local development
+- Fast block times (1s) for development
+- Debug logging enabled
+
+## Testing
+
+- Unit tests: Standard Go tests in each package
+- Integration tests: `tests/harness/` provides test infrastructure
+- E2E tests: `tests/e2e/` contains end-to-end scenarios
+- Mock WASM contracts for testing
+
+## Rust SDK
+
+- `sdk/rust/accumen-abi/` - Rust ABI bindings
+- `sdk/rust/examples/counter/` - Example counter contract
+- Use `cargo build --target wasm32-unknown-unknown --release` to build contracts
+
+## Documentation
+
+- `docs/ARCHITECTURE.md` - System architecture overview
+- `docs/RUNBOOK.md` - Operations and troubleshooting guide
+- Code is self-documenting with comprehensive comments
+
+## Development Tips
+
+1. Always run `make generate` after modifying proto files or JSON schemas
+2. Use `config/local.yaml` for development (bridge disabled by default)
+3. Check `make test` passes before committing changes
+4. Use the test harness in `tests/harness/` for integration testing
+5. Monitor logs when running locally for debugging
+
+## Common Tasks
+
+### Adding New Host Functions
+1. Add function to `engine/host/abi.go`
+2. Register in `engine/runtime/host_bindings.go`
+3. Update Rust ABI in `sdk/rust/accumen-abi/src/lib.rs`
+4. Add tests
+
+### Modifying Transaction Metadata
+1. Update JSON schema in `types/json/accumen-tx-metadata.schema.json`
+2. Run `make json` to regenerate Go types
+3. Update metadata builder in `types/json/metadata_builder.go`
+4. Update tests
+
+### Adding Bridge Features
+1. Implement in appropriate `bridge/` package
+2. Integrate in `sequencer/loop.go`
+3. Add configuration options
+4. Add tests with mock L0 client
+
+## Debugging
+
+- Enable debug logging in `config/local.yaml`
+- Use health endpoints: `curl http://127.0.0.1:8082/health`
+- Check stats endpoints: `curl http://127.0.0.1:8080/stats`
+- Monitor logs for transaction execution details
+
+## Performance
+
+- Block time configurable (default 1s for dev)
+- Parallel transaction execution
+- Batched L0 submissions
+- Gas metering for resource control
+- Mempool with priority ordering
+
+Last updated: Generated by Claude Code

@@ -20,19 +20,35 @@ build:
 test:
 	$(GOTEST) -v ./...
 
-# Run as sequencer with example config
+# Run as sequencer with local config
 run-sequencer: build
-	$(BINARY_PATH) --role=sequencer --config=./config/example.json
+	$(BINARY_PATH) --role=sequencer --config=./config/local.yaml
 
-# Generate protobuf files (placeholder)
+# Generate protobuf files
 proto:
 	@echo "Generating protobuf files..."
-	@echo "TODO: Add protoc generation commands"
+	./tools/gen-proto.sh --proto-dir types/proto --output-dir types/generated/proto
 
-# Generate JSON schemas (placeholder)
+# Generate JSON schemas
 json:
 	@echo "Generating JSON schemas..."
-	@echo "TODO: Add JSON schema generation commands"
+	./tools/gen-json.sh --schema-dir types/json --output-dir types/generated/json
+
+# Generate both proto and json
+generate: proto json
+
+# Integration tests
+test-integration:
+	$(GOTEST) -v ./tests/harness/...
+
+# End-to-end tests
+test-e2e:
+	$(GOTEST) -v ./tests/e2e/...
+
+# Build for release
+build-release:
+	mkdir -p bin
+	CGO_ENABLED=0 $(GOBUILD) -ldflags="-w -s" -o $(BINARY_PATH) ./cmd/accumen
 
 # Clean build artifacts
 clean:

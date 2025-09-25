@@ -93,6 +93,31 @@ accumulate-accumen/
 └── README.md           # This file
 ```
 
+## Documentation
+
+- [Architecture Overview](docs/ARCHITECTURE.md) - System design and components
+- [Operations Runbook](docs/RUNBOOK.md) - Deployment and troubleshooting guide
+- [Claude Code Notes](CLAUDE.md) - Development workflow and build commands
+
+## SDK and Examples
+
+### Rust SDK
+- [Accumen ABI](sdk/rust/accumen-abi/) - Rust bindings for WASM contracts
+- [Counter Example](sdk/rust/examples/counter/) - Simple counter smart contract
+
+### Building Contracts
+```bash
+# Build Rust contract to WASM
+cd sdk/rust/examples/counter
+cargo build --target wasm32-unknown-unknown --release
+```
+
+## Testing
+
+- Unit tests: `make test`
+- Integration tests: `make test-integration`
+- End-to-end tests: `make test-e2e`
+
 ## Contributing
 
 This is an MVP implementation. Future development will include:
