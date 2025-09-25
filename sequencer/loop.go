@@ -6,10 +6,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/bridge/anchors"
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/registry/dn"
+	"github.com/opendlt/accumulate-accumen/types/json"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 )
@@ -31,6 +33,10 @@ type Sequencer struct {
 
 	// Registry client
 	registryClient *dn.Client
+
+	// Metadata and anchoring
+	metadataBuilder *json.MetadataBuilder
+	dnWriter        *anchors.DNWriter
 
 	// State
 	running      bool
@@ -95,17 +101,28 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 		return nil, fmt.Errorf("failed to create registry client: %w", err)
 	}
 
+	// Create metadata builder
+	metadataBuilder := json.NewMetadataBuilder(json.DefaultBuilderConfig())
+
+	// Create DN writer
+	dnWriter, err := anchors.NewDNWriter(anchors.DefaultDNWriterConfig())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create DN writer: %w", err)
+	}
+
 	sequencer := &Sequencer{
 		config:         config,
 		mempool:        mempool,
 		engine:         engine,
 		l0Client:       l0Client,
 		outputStager:   outputStager,
-		submitter:      submitter,
-		creditMgr:      creditMgr,
-		registryClient: registryClient,
-		blockHeight:    engine.GetCurrentHeight(),
-		stopChan:       make(chan struct{}),
+		submitter:       submitter,
+		creditMgr:       creditMgr,
+		registryClient:  registryClient,
+		metadataBuilder: metadataBuilder,
+		dnWriter:        dnWriter,
+		blockHeight:     engine.GetCurrentHeight(),
+		stopChan:        make(chan struct{}),
 	}
 
 	return sequencer, nil
@@ -132,6 +149,11 @@ func (s *Sequencer) Start(ctx context.Context) error {
 	if s.config.Bridge.EnableBridge {
 		if err := s.submitter.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start output submitter: %w", err)
+		}
+
+		// Start DN writer
+		if err := s.dnWriter.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start DN writer: %w", err)
 		}
 	}
 
@@ -173,9 +195,15 @@ func (s *Sequencer) Stop(ctx context.Context) error {
 		return fmt.Errorf("failed to stop mempool: %w", err)
 	}
 
-	// Stop output submitter
+	// Stop output submitter and DN writer
 	if err := s.submitter.Stop(); err != nil {
 		return fmt.Errorf("failed to stop output submitter: %w", err)
+	}
+
+	if s.config.Bridge.EnableBridge {
+		if err := s.dnWriter.Stop(ctx); err != nil {
+			return fmt.Errorf("failed to stop DN writer: %w", err)
+		}
 	}
 
 	// Close execution engine
@@ -232,6 +260,7 @@ func (s *Sequencer) produceBlock(ctx context.Context) {
 	// Submit block to L0 bridge if enabled
 	if s.config.Bridge.EnableBridge {
 		s.submitBlockToL0(ctx, block)
+		s.writeMetadataToL0(ctx, block)
 	}
 
 	fmt.Printf("Produced block %d with %d transactions\n",
@@ -454,4 +483,42 @@ func (s *Sequencer) EstimateGas(ctx context.Context, tx *Transaction) (uint64, e
 // GetRegistryStats returns statistics about the DN registry
 func (s *Sequencer) GetRegistryStats() (*dn.RegistryStats, error) {
 	return s.registryClient.GetRegistryStats()
+}
+
+// writeMetadataToL0 writes transaction metadata to the Accumulate L0 network
+func (s *Sequencer) writeMetadataToL0(ctx context.Context, block *Block) {
+	// Process each successful transaction result
+	for i, result := range block.Results {
+		if !result.Success {
+			continue // Skip failed transactions
+		}
+
+		// Build metadata from receipt
+		metadata, err := s.metadataBuilder.BuildFromReceipt(result.Receipt)
+		if err != nil {
+			fmt.Printf("Failed to build metadata for tx %s: %v\n", result.TxID, err)
+			continue
+		}
+
+		// Write metadata to DN with appropriate priority
+		priority := int64(100) // Default priority
+		if result.Receipt.Priority > 0 {
+			priority = int64(result.Receipt.Priority)
+		}
+
+		// Submit metadata asynchronously
+		go func(meta *json.TransactionMetadata, prio int64, txID string) {
+			response, err := s.dnWriter.WriteMetadata(ctx, meta, prio)
+			if err != nil {
+				fmt.Printf("Failed to write metadata for tx %s: %v\n", txID, err)
+				return
+			}
+
+			if response.Success {
+				fmt.Printf("Metadata written for tx %s: %s\n", txID, response.TxHash)
+			} else {
+				fmt.Printf("Metadata write failed for tx %s: %v\n", txID, response.Error)
+			}
+		}(metadata, priority, result.TxID)
+	}
 }
