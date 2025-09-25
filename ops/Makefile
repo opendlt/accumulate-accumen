@@ -1,4 +1,4 @@
-.PHONY: build test run-sequencer proto json clean
+.PHONY: build test run-sequencer proto json clean run-sim
 
 # Go build settings
 GOCMD=go
@@ -7,6 +7,17 @@ GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
 BINARY_NAME=accumen
 BINARY_PATH=./bin/$(BINARY_NAME)
+
+# Detect OS for cross-platform commands
+ifeq ($(OS),Windows_NT)
+    DETECTED_OS := Windows
+    RUN_ACCUMEN := powershell -ExecutionPolicy Bypass -File ops/run-accumen.ps1
+    RUN_SIM := powershell -ExecutionPolicy Bypass -File ops/run-sim.ps1
+else
+    DETECTED_OS := $(shell uname -s)
+    RUN_ACCUMEN := $(GOCMD) run ./cmd/accumen --role=sequencer --config=./config/local.yaml --rpc=:8666
+    RUN_SIM := @echo "Simulator runner not yet implemented for POSIX. Use: cd test/simulator && go test -v -run TestSimulator"
+endif
 
 # Default target
 all: build
@@ -20,9 +31,15 @@ build:
 test:
 	$(GOTEST) -v ./...
 
-# Run as sequencer with local config
-run-sequencer: build
-	$(BINARY_PATH) --role=sequencer --config=./config/local.yaml
+# Run as sequencer with local config (OS-aware)
+run-sequencer:
+	@echo "Starting Accumen sequencer on $(DETECTED_OS)..."
+	$(RUN_ACCUMEN)
+
+# Run Accumulate simulator for testing
+run-sim:
+	@echo "Accumulate simulator setup for $(DETECTED_OS)..."
+	$(RUN_SIM)
 
 # Generate protobuf files
 proto:
@@ -71,3 +88,27 @@ lint:
 # Install tools
 install-tools:
 	$(GOCMD) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+# Quick development targets
+dev: build run-sequencer
+
+# Show available targets
+help:
+	@echo "Available targets:"
+	@echo "  build              Build the binary"
+	@echo "  test               Run tests"
+	@echo "  run-sequencer      Run Accumen sequencer locally"
+	@echo "  run-sim            Setup/run Accumulate simulator"
+	@echo "  proto              Generate protobuf files"
+	@echo "  json               Generate JSON schemas"
+	@echo "  generate           Generate both proto and json"
+	@echo "  test-integration   Run integration tests"
+	@echo "  test-e2e           Run end-to-end tests"
+	@echo "  build-release      Build optimized release binary"
+	@echo "  clean              Clean build artifacts"
+	@echo "  deps               Download and tidy dependencies"
+	@echo "  fmt                Format code"
+	@echo "  lint               Run linter"
+	@echo "  install-tools      Install development tools"
+	@echo "  dev                Build and run sequencer"
+	@echo "  help               Show this help message"
