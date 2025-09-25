@@ -27,6 +27,11 @@ type Config struct {
 		GasScheduleID   string `yaml:"gasScheduleID"`   // Gas schedule ID to fetch from DN registry
 		RefreshInterval string `yaml:"refreshInterval"` // How often to refresh schedule (e.g., "60s")
 	} `yaml:"pricing"`
+	Submitter struct {
+		BatchSize   int    `yaml:"batchSize"`   // Number of items to process per batch
+		BackoffMin  string `yaml:"backoffMin"`  // Minimum backoff duration (e.g., "1s")
+		BackoffMax  string `yaml:"backoffMax"`  // Maximum backoff duration (e.g., "5m")
+	} `yaml:"submitter"`
 	SequencerKey string `yaml:"sequencerKey"` // hex or base64, placeholder
 }
 
@@ -109,6 +114,17 @@ func (c *Config) setDefaults() error {
 		c.Pricing.RefreshInterval = "60s"
 	}
 
+	// Set default submitter configuration
+	if c.Submitter.BatchSize == 0 {
+		c.Submitter.BatchSize = 10
+	}
+	if c.Submitter.BackoffMin == "" {
+		c.Submitter.BackoffMin = "1s"
+	}
+	if c.Submitter.BackoffMax == "" {
+		c.Submitter.BackoffMax = "5m"
+	}
+
 	return nil
 }
 
@@ -166,6 +182,27 @@ func (c *Config) validate() error {
 		}
 	}
 
+	// Validate submitter configuration
+	if c.Submitter.BatchSize < 1 {
+		return fmt.Errorf("submitter batch size must be at least 1, got %d", c.Submitter.BatchSize)
+	}
+	if c.Submitter.BatchSize > 1000 {
+		return fmt.Errorf("submitter batch size must be at most 1000, got %d", c.Submitter.BatchSize)
+	}
+	if _, err := time.ParseDuration(c.Submitter.BackoffMin); err != nil {
+		return fmt.Errorf("invalid submitter backoff min %s: %w", c.Submitter.BackoffMin, err)
+	}
+	if _, err := time.ParseDuration(c.Submitter.BackoffMax); err != nil {
+		return fmt.Errorf("invalid submitter backoff max %s: %w", c.Submitter.BackoffMax, err)
+	}
+
+	// Validate backoff min <= backoff max
+	minDuration, _ := time.ParseDuration(c.Submitter.BackoffMin)
+	maxDuration, _ := time.ParseDuration(c.Submitter.BackoffMax)
+	if minDuration > maxDuration {
+		return fmt.Errorf("submitter backoff min (%s) cannot be greater than backoff max (%s)", c.Submitter.BackoffMin, c.Submitter.BackoffMax)
+	}
+
 	return nil
 }
 
@@ -199,8 +236,28 @@ func (c *Config) GetPricingRefreshDuration() time.Duration {
 	return duration
 }
 
+// GetBackoffMinDuration returns the minimum backoff duration as a time.Duration
+func (c *Config) GetBackoffMinDuration() time.Duration {
+	duration, err := time.ParseDuration(c.Submitter.BackoffMin)
+	if err != nil {
+		// This should not happen if validation passed
+		return 1 * time.Second
+	}
+	return duration
+}
+
+// GetBackoffMaxDuration returns the maximum backoff duration as a time.Duration
+func (c *Config) GetBackoffMaxDuration() time.Duration {
+	duration, err := time.ParseDuration(c.Submitter.BackoffMax)
+	if err != nil {
+		// This should not happen if validation passed
+		return 5 * time.Minute
+	}
+	return duration
+}
+
 // String returns a string representation of the config
 func (c *Config) String() string {
-	return fmt.Sprintf("Config{Endpoints: %v, BlockTime: %s, AnchorEvery: %s, AnchorEveryN: %d, GasScheduleID: %s}",
-		c.APIV3Endpoints, c.BlockTime, c.AnchorEvery, c.AnchorEveryN, c.Pricing.GasScheduleID)
+	return fmt.Sprintf("Config{Endpoints: %v, BlockTime: %s, AnchorEvery: %s, AnchorEveryN: %d, GasScheduleID: %s, BatchSize: %d}",
+		c.APIV3Endpoints, c.BlockTime, c.AnchorEvery, c.AnchorEveryN, c.Pricing.GasScheduleID, c.Submitter.BatchSize)
 }

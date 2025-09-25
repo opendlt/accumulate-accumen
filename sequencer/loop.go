@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -13,11 +14,38 @@ import (
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
+	"github.com/opendlt/accumulate-accumen/internal/config"
+	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/registry/dn"
 	"github.com/opendlt/accumulate-accumen/types/json"
 
+	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/client/signing"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 )
+
+// SubmissionLoop manages the envelope submission pipeline
+type SubmissionLoop struct {
+	config       *config.Config
+	outbox       *outputs.Outbox
+	client       *v3.Client
+	signer       signing.Signer
+	logger       *logz.Logger
+	submitterCfg *config.Submitter
+}
+
+// NewSubmissionLoop creates a new submission loop
+func NewSubmissionLoop(cfg *config.Config, outbox *outputs.Outbox, client *v3.Client, signer signing.Signer) *SubmissionLoop {
+	return &SubmissionLoop{
+		config:       cfg,
+		outbox:       outbox,
+		client:       client,
+		signer:       signer,
+		logger:       logz.New(logz.INFO, "submission-loop"),
+		submitterCfg: &cfg.Submitter,
+	}
+}
 
 // Sequencer represents the main Accumen sequencer
 type Sequencer struct {
@@ -29,10 +57,12 @@ type Sequencer struct {
 	engine    *ExecutionEngine
 
 	// Bridge components
-	l0Client     *l0api.Client
-	outputStager *outputs.OutputStager
-	submitter    *outputs.OutputSubmitter
-	creditMgr    *pricing.CreditManager
+	l0Client       *l0api.Client
+	outputStager   *outputs.OutputStager
+	submitter      *outputs.OutputSubmitter
+	creditMgr      *pricing.CreditManager
+	submissionLoop *SubmissionLoop
+	outbox         *outputs.Outbox
 
 	// Registry client
 	registryClient *dn.Client
@@ -678,4 +708,232 @@ func (s *Sequencer) GetLastAnchorHeight() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.lastAnchorHeight
+}
+
+// Start begins the submission loop
+func (sl *SubmissionLoop) Start(ctx context.Context) error {
+	sl.logger.Info("Starting submission loop with batch size %d", sl.submitterCfg.BatchSize)
+
+	// Start the outbox worker goroutine
+	go sl.OutboxWorker(ctx)
+
+	return nil
+}
+
+// EnqueueEnvelope adds an envelope to the outbox for submission
+func (sl *SubmissionLoop) EnqueueEnvelope(env *build.EnvelopeBuilder) (string, error) {
+	id, err := sl.outbox.Enqueue(env)
+	if err != nil {
+		return "", fmt.Errorf("failed to enqueue envelope: %w", err)
+	}
+
+	sl.logger.Debug("Enqueued envelope with ID: %s", id)
+	return id, nil
+}
+
+// EnqueueEnvelopes adds multiple envelopes to the outbox for submission
+func (sl *SubmissionLoop) EnqueueEnvelopes(envs []*build.EnvelopeBuilder) ([]string, error) {
+	ids := make([]string, len(envs))
+
+	for i, env := range envs {
+		id, err := sl.outbox.Enqueue(env)
+		if err != nil {
+			return nil, fmt.Errorf("failed to enqueue envelope %d: %w", i, err)
+		}
+		ids[i] = id
+	}
+
+	sl.logger.Debug("Enqueued %d envelopes", len(envs))
+	return ids, nil
+}
+
+// OutboxWorker continuously processes items from the outbox
+func (sl *SubmissionLoop) OutboxWorker(ctx context.Context) {
+	sl.logger.Info("Outbox worker started")
+	defer sl.logger.Info("Outbox worker stopped")
+
+	ticker := time.NewTicker(1 * time.Second) // Check every second
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := sl.processBatch(ctx); err != nil {
+				sl.logger.Info("Error processing batch: %v", err)
+			}
+		}
+	}
+}
+
+// processBatch processes a batch of ready items from the outbox
+func (sl *SubmissionLoop) processBatch(ctx context.Context) error {
+	// Get ready items from outbox
+	items, err := sl.outbox.DequeueReady(time.Now(), sl.submitterCfg.BatchSize)
+	if err != nil {
+		return fmt.Errorf("failed to dequeue ready items: %w", err)
+	}
+
+	if len(items) == 0 {
+		return nil // Nothing to process
+	}
+
+	sl.logger.Debug("Processing batch of %d items", len(items))
+
+	// Process each item
+	for _, item := range items {
+		if err := sl.processItem(ctx, item); err != nil {
+			sl.logger.Info("Failed to process item %s: %v", item.ID, err)
+			// Item will be retried with backoff
+		}
+	}
+
+	return nil
+}
+
+// processItem processes a single outbox item
+func (sl *SubmissionLoop) processItem(ctx context.Context, item *outputs.OutboxItem) error {
+	sl.logger.Debug("Processing item %s (attempt %d): %s", item.ID, item.Tries+1, item.OpSummary)
+
+	// Deserialize envelope
+	envelope, err := deserializeEnvelope(item.EnvBytes)
+	if err != nil {
+		// Permanent error - remove from queue
+		sl.outbox.MarkDone(item.ID)
+		return fmt.Errorf("failed to deserialize envelope: %w", err)
+	}
+
+	// Sign envelope if signer is available
+	if sl.signer != nil {
+		signedEnv, err := sl.signEnvelope(envelope)
+		if err != nil {
+			// Retry with backoff
+			backoff := sl.calculateBackoff(item.Tries)
+			sl.outbox.MarkRetry(item.ID, backoff)
+			return fmt.Errorf("failed to sign envelope: %w", err)
+		}
+		envelope = signedEnv
+	}
+
+	// Submit envelope to L0 API
+	if err := sl.submitEnvelope(ctx, envelope); err != nil {
+		// Check if this is a permanent error
+		if isPermanentError(err) {
+			sl.logger.Info("Permanent error for item %s, removing from queue: %v", item.ID, err)
+			sl.outbox.MarkDone(item.ID)
+			return err
+		}
+
+		// Retry with backoff
+		backoff := sl.calculateBackoff(item.Tries)
+		sl.logger.Debug("Retrying item %s in %v (attempt %d)", item.ID, backoff, item.Tries+1)
+		sl.outbox.MarkRetry(item.ID, backoff)
+		return err
+	}
+
+	// Success - mark as done
+	sl.logger.Debug("Successfully submitted item %s", item.ID)
+	sl.outbox.MarkDone(item.ID)
+	return nil
+}
+
+// signEnvelope signs an envelope using the configured signer
+func (sl *SubmissionLoop) signEnvelope(envelope interface{}) (interface{}, error) {
+	// TODO: Implement envelope signing with the signer
+	// This is a placeholder - actual implementation would depend on
+	// the envelope format and signing requirements
+	sl.logger.Debug("Signing envelope (placeholder implementation)")
+	return envelope, nil
+}
+
+// submitEnvelope submits an envelope to the L0 API client
+func (sl *SubmissionLoop) submitEnvelope(ctx context.Context, envelope interface{}) error {
+	// TODO: Implement envelope submission via L0 API client
+	// This is a placeholder - actual implementation would depend on
+	// the client API and envelope format
+	sl.logger.Debug("Submitting envelope to L0 API (placeholder implementation)")
+
+	// Simulate submission delay
+	select {
+	case <-time.After(10 * time.Millisecond):
+		return nil // Success
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// calculateBackoff calculates exponential backoff duration
+func (sl *SubmissionLoop) calculateBackoff(tries int) time.Duration {
+	minBackoff := sl.submitterCfg.GetBackoffMinDuration()
+	maxBackoff := sl.submitterCfg.GetBackoffMaxDuration()
+
+	// Exponential backoff: min * 2^tries, capped at max
+	backoff := time.Duration(float64(minBackoff) * math.Pow(2, float64(tries)))
+	if backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+
+	return backoff
+}
+
+// isPermanentError determines if an error is permanent and should not be retried
+func isPermanentError(err error) bool {
+	// TODO: Implement proper permanent error detection
+	// This would check for specific error types that indicate
+	// the request should not be retried (e.g., malformed data,
+	// authentication errors, etc.)
+	return false
+}
+
+// deserializeEnvelope deserializes envelope bytes
+func deserializeEnvelope(data []byte) (interface{}, error) {
+	// TODO: Implement proper envelope deserialization
+	// This is a placeholder - actual implementation would depend on
+	// the envelope format used
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty envelope data")
+	}
+	return data, nil // Placeholder return
+}
+
+// SubmissionStats contains statistics about the submission loop
+type SubmissionStats struct {
+	outputs.OutboxStats
+	BatchSize  int    `json:"batch_size"`
+	BackoffMin string `json:"backoff_min"`
+	BackoffMax string `json:"backoff_max"`
+}
+
+// GetSubmissionStats returns statistics about the submission loop
+func (sl *SubmissionLoop) GetSubmissionStats() (*SubmissionStats, error) {
+	outboxStats, err := sl.outbox.GetStats()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get outbox stats: %w", err)
+	}
+
+	return &SubmissionStats{
+		OutboxStats: *outboxStats,
+		BatchSize:   sl.submitterCfg.BatchSize,
+		BackoffMin:  sl.submitterCfg.BackoffMin,
+		BackoffMax:  sl.submitterCfg.BackoffMax,
+	}, nil
+}
+
+// Cleanup performs maintenance on the submission pipeline
+func (sl *SubmissionLoop) Cleanup() error {
+	// Clean up old outbox items (older than 24 hours with many retries)
+	return sl.outbox.Cleanup(24 * time.Hour)
+}
+
+// Stop gracefully stops the submission loop
+func (sl *SubmissionLoop) Stop(ctx context.Context) error {
+	sl.logger.Info("Stopping submission loop")
+
+	// Perform final cleanup
+	if err := sl.Cleanup(); err != nil {
+		sl.logger.Info("Warning: Failed to cleanup during stop: %v", err)
+	}
+
+	return nil
 }
