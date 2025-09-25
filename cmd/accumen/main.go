@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -109,7 +110,36 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 		},
 	}
 
-	// Create and start sequencer
+	// Create KV store based on configuration first (needed for sequencer)
+	var kvStore state.KVStore
+	var err_kv error
+
+	if cfg.Storage.Backend == "badger" {
+		// Ensure storage directory exists
+		if err := os.MkdirAll(cfg.Storage.Path, 0755); err != nil {
+			return fmt.Errorf("failed to create storage directory %s: %w", cfg.Storage.Path, err)
+		}
+
+		kvStore, err_kv = state.NewBadgerStore(cfg.Storage.Path)
+		if err_kv != nil {
+			return fmt.Errorf("failed to create Badger store: %w", err_kv)
+		}
+		logger.Info("Using Badger storage at: %s", cfg.Storage.Path)
+
+		// Ensure proper cleanup on shutdown
+		defer func() {
+			if badgerStore, ok := kvStore.(*state.BadgerStore); ok {
+				if closeErr := badgerStore.Close(); closeErr != nil {
+					logger.Info("Warning: Failed to close Badger store: %v", closeErr)
+				}
+			}
+		}()
+	} else {
+		kvStore = state.NewMemoryKVStore()
+		logger.Info("Using in-memory storage")
+	}
+
+	// Create and start sequencer (pass KV store)
 	seq, err := sequencer.NewSequencer(seqConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create sequencer: %w", err)
@@ -124,13 +154,11 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client)
 		cfg.GetBlockTimeDuration(), cfg.GetAnchorIntervalDuration(), cfg.AnchorEveryN)
 	logger.Info("Gas schedule ID: %s", cfg.GasScheduleID)
 	logger.Info("DN paths - Anchors: %s, TxMeta: %s", cfg.DNPaths.Anchors, cfg.DNPaths.TxMeta)
+	logger.Info("Storage: backend=%s, path=%s", cfg.Storage.Backend, cfg.Storage.Path)
 
 	// Start RPC server if address is provided
 	var rpcServer *rpc.Server
 	if *rpcAddr != "" {
-		// Create a simple KV store for queries (in production this would be the actual state store)
-		kvStore := state.NewMemoryKVStore()
-
 		rpcServer = rpc.NewServer(&rpc.Dependencies{
 			Sequencer: seq,
 			KVStore:   kvStore,

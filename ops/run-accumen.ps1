@@ -59,6 +59,24 @@ if (-not (Test-Path "cmd/accumen")) {
     exit 1
 }
 
+# Extract storage path from config and ensure data directory exists
+try {
+    if (Get-Command "yq" -ErrorAction SilentlyContinue) {
+        $storagePath = yq '.storage.path // "data/l1"' $Config
+        if ($storagePath -and $storagePath -ne "null") {
+            Write-ColoredOutput "📁 Ensuring storage directory exists: $storagePath" $Yellow
+            New-Item -ItemType Directory -Force -Path $storagePath | Out-Null
+        }
+    } else {
+        # Default path if yq is not available
+        $defaultPath = "data/l1"
+        Write-ColoredOutput "📁 Ensuring default storage directory exists: $defaultPath" $Yellow
+        New-Item -ItemType Directory -Force -Path $defaultPath | Out-Null
+    }
+} catch {
+    Write-ColoredOutput "⚠️  Warning: Could not create storage directory: $($_.Exception.Message)" $Yellow
+}
+
 # Display config summary
 Write-ColoredOutput "📋 Configuration Summary:" $Blue
 try {

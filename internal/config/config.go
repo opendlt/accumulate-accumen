@@ -19,6 +19,10 @@ type Config struct {
 		Anchors string `yaml:"anchorsBase"`
 		TxMeta  string `yaml:"txBase"`
 	} `yaml:"dnPaths"`
+	Storage struct {
+		Backend string `yaml:"backend"` // "memory" | "badger"
+		Path    string `yaml:"path"`    // e.g. "data/l1"
+	} `yaml:"storage"`
 	SequencerKey string `yaml:"sequencerKey"` // hex or base64, placeholder
 }
 
@@ -85,6 +89,14 @@ func (c *Config) setDefaults() error {
 		c.DNPaths.TxMeta = "acc://dn.acme/tx-metadata"
 	}
 
+	// Set default storage configuration
+	if c.Storage.Backend == "" {
+		c.Storage.Backend = "memory"
+	}
+	if c.Storage.Path == "" {
+		c.Storage.Path = "data/l1"
+	}
+
 	return nil
 }
 
@@ -122,6 +134,14 @@ func (c *Config) validate() error {
 	}
 	if c.DNPaths.TxMeta == "" {
 		return fmt.Errorf("DN tx metadata path cannot be empty")
+	}
+
+	// Validate storage backend
+	if c.Storage.Backend != "memory" && c.Storage.Backend != "badger" {
+		return fmt.Errorf("storage backend must be 'memory' or 'badger', got %s", c.Storage.Backend)
+	}
+	if c.Storage.Path == "" {
+		return fmt.Errorf("storage path cannot be empty")
 	}
 
 	return nil
