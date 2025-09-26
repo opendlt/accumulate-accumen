@@ -265,6 +265,276 @@ To view the metadata written to the DN:
    INFO[2024-01-15T10:35:15Z] Metadata written successfully               calls=3 total_bytes=2048
    ```
 
+## Run a Real Devnet
+
+For development and testing purposes, you can run a real Accumulate devnet locally. This provides a more realistic environment compared to the embedded simulator.
+
+### Prerequisites
+
+- Go 1.21 or later installed
+- Network connectivity to download Accumulate dependencies
+- At least 4GB of free disk space
+- Ports 26660, 26670, 26680, 26690 available
+
+### Initialize Devnet
+
+Use the provided scripts to initialize the devnet configuration:
+
+#### Windows (PowerShell)
+```powershell
+# Initialize devnet in a temporary directory
+.\ops\devnet-init.ps1
+
+# Or specify a custom directory
+.\ops\devnet-init.ps1 -WorkDir "C:\accumulate-devnet"
+```
+
+#### POSIX (Linux/macOS)
+```bash
+# Initialize devnet in a temporary directory
+./ops/devnet-init.sh
+
+# Or specify a custom directory
+./ops/devnet-init.sh --work-dir /tmp/accumulate-devnet
+```
+
+**Expected Output:**
+```
+=== Accumulate Devnet Initialization ===
+Work directory: /tmp/accumulate-devnet-20240115-143022
+
+Initializing Accumulate devnet...
+Devnet initialized successfully!
+
+=== RPC Endpoints ===
+Configuration file: /tmp/accumulate-devnet-20240115-143022/.accumulate/config.toml
+RPC Endpoint: http://localhost:26660
+RPC Endpoint: http://localhost:26670
+RPC Endpoint: http://localhost:26680
+RPC Endpoint: http://localhost:26690
+
+=== Configuration for Accumen ===
+Add these endpoints to your Accumen config:
+
+l0:
+  source: static
+  static:
+    endpoints:
+      - http://localhost:26660  # Directory Network
+      - http://localhost:26670  # Block Validator 0
+      - http://localhost:26680  # Block Validator 1
+      - http://localhost:26690  # Block Validator 2
+```
+
+### Run Devnet
+
+Start the initialized devnet:
+
+#### Windows (PowerShell)
+```powershell
+# Run devnet (using work directory from init script)
+.\ops\devnet-run.ps1 -WorkDir "C:\temp\accumulate-devnet-20240115-143022"
+```
+
+#### POSIX (Linux/macOS)
+```bash
+# Run devnet (using work directory from init script)
+./ops/devnet-run.sh --work-dir /tmp/accumulate-devnet-20240115-143022
+```
+
+**Expected Output:**
+```
+=== Accumulate Devnet Runner ===
+Work directory: /tmp/accumulate-devnet-20240115-143022
+Log file: logs/devnet-20240115-143045.log
+
+Starting Accumulate devnet...
+Devnet process started with PID: 12345
+Waiting for RPC endpoints to become available...
+..........
+Directory Network RPC is ready: http://localhost:26660
+
+=== Devnet Status ===
+✓ http://localhost:26660 - Ready
+✓ http://localhost:26670 - Ready
+✓ http://localhost:26680 - Ready
+✓ http://localhost:26690 - Ready
+
+=== Devnet Running Successfully! ===
+Process ID: 12345
+Log file: logs/devnet-20240115-143045.log
+
+Primary endpoints:
+  Directory Network: http://localhost:26660
+  Block Validator 0: http://localhost:26670
+  Block Validator 1: http://localhost:26680
+  Block Validator 2: http://localhost:26690
+
+The devnet is now ready for use with Accumen!
+Press Ctrl+C to stop the devnet
+```
+
+### Configure Accumen for Devnet
+
+Update your Accumen configuration to use the devnet endpoints:
+
+```yaml
+# config/devnet.yaml
+l0:
+  source: static
+  static:
+    endpoints:
+      - http://localhost:26660  # Directory Network
+      - http://localhost:26670  # Block Validator 0
+      - http://localhost:26680  # Block Validator 1
+      - http://localhost:26690  # Block Validator 2
+
+# Enable events monitoring for confirmations
+events:
+  enable: true
+  reconnectMin: "1s"
+  reconnectMax: "30s"
+
+# Bridge configuration for devnet
+bridge:
+  enableBridge: true
+  client:
+    serverURL: "http://localhost:26660"
+    sequencerKey: "your-key-here"
+
+# Faster block times for development
+blockTime: "2s"
+maxTransactions: 100
+```
+
+### Start Accumen with Devnet
+
+```bash
+# Start Accumen sequencer with devnet configuration
+go run ./cmd/accumen \
+  --role=sequencer \
+  --config=config/devnet.yaml \
+  --rpc=:8666 \
+  --log-level=debug
+```
+
+### Verify Integration
+
+Test the integration between Accumen and the devnet:
+
+```bash
+# 1. Deploy a test contract
+./bin/accucli deploy \
+  --addr=acc://test-counter.acme \
+  --wasm=./examples/counter.wasm \
+  --rpc=http://localhost:8666
+
+# 2. Invoke the contract
+./bin/accucli submit \
+  --contract=acc://test-counter.acme \
+  --entry=increment \
+  --arg=amount:1 \
+  --rpc=http://localhost:8666
+
+# 3. Check Accumulate DN for metadata
+curl -X POST http://localhost:26660/v3 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "method": "query",
+    "params": {
+      "url": "acc://accumen.acme"
+    }
+  }'
+```
+
+### Script Options
+
+#### devnet-init Options
+
+**PowerShell:**
+```powershell
+.\ops\devnet-init.ps1 [-WorkDir <path>] [-Help]
+```
+
+**Bash:**
+```bash
+./ops/devnet-init.sh [--work-dir <path>] [--help]
+```
+
+#### devnet-run Options
+
+**PowerShell:**
+```powershell
+.\ops\devnet-run.ps1 -WorkDir <path> [-LogDir <path>] [-TimeoutSeconds <int>]
+```
+
+**Bash:**
+```bash
+./ops/devnet-run.sh --work-dir <path> [--log-dir <path>] [--timeout <seconds>]
+```
+
+### Troubleshooting Devnet
+
+#### Common Issues
+
+1. **Port Already in Use:**
+   ```bash
+   # Check what's using the ports
+   netstat -tlnp | grep -E '2666[0-9]'
+
+   # Kill conflicting processes
+   sudo fuser -k 26660/tcp
+   ```
+
+2. **RPC Not Ready:**
+   - Wait longer for initialization (can take 30-60 seconds)
+   - Check log file for errors
+   - Verify Go version compatibility
+
+3. **Connection Refused:**
+   ```bash
+   # Test direct connection
+   curl http://localhost:26660/status
+
+   # Check firewall settings
+   sudo ufw status
+   ```
+
+#### Log Analysis
+
+```bash
+# Monitor devnet logs
+tail -f logs/devnet-*.log
+
+# Search for errors
+grep -i error logs/devnet-*.log
+
+# Check for specific components
+grep -E "(DN|BVN)" logs/devnet-*.log
+```
+
+### Cleanup
+
+To clean up the devnet:
+
+1. **Stop the devnet**: Press `Ctrl+C` in the terminal running devnet-run
+2. **Remove work directory**: `rm -rf /path/to/workdir` (if desired)
+3. **Clean logs**: `rm -f logs/devnet-*.log` (optional)
+
+### Benefits of Real Devnet
+
+Compared to the embedded simulator, a real devnet provides:
+
+- **Multi-node consensus**: Full BFT consensus with multiple validators
+- **Network persistence**: State persists across restarts
+- **Production-like behavior**: More realistic transaction processing
+- **Full L0 API**: Complete Accumulate API compatibility
+- **Event monitoring**: Real WebSocket events for confirmations
+- **DN integration**: Actual Directory Network for metadata storage
+
+This makes it ideal for integration testing and development workflows that require a production-like environment.
+
 ## Deploying a Contract via RPC
 
 Accumen supports deploying WASM smart contracts through the JSON-RPC API. Contracts are stored persistently and referenced by their Accumulate-style addresses.
