@@ -50,6 +50,10 @@ type Config struct {
 		Type string `yaml:"type"` // "file" | "env" | "dev"
 		Key  string `yaml:"key"`  // path or env name or raw key (dev only)
 	} `yaml:"signer"`
+	Namespace struct {
+		ReservedLabel string `yaml:"reservedLabel"` // default "accumen"
+		Enforce       bool   `yaml:"enforce"`       // enforce namespace restrictions
+	} `yaml:"namespace"`
 	SequencerKey string `yaml:"sequencerKey"` // DEPRECATED: hex or base64, use Signer instead
 }
 
@@ -190,6 +194,11 @@ func (c *Config) setDefaults() error {
 			// Default to dev signer with generated key
 			c.Signer.Type = "dev"
 		}
+	}
+
+	// Set default namespace configuration
+	if c.Namespace.ReservedLabel == "" {
+		c.Namespace.ReservedLabel = "accumen"
 	}
 
 	return nil

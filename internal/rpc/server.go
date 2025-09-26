@@ -438,6 +438,17 @@ func (s *Server) handleSubmitTx(params interface{}) (interface{}, *RPCError) {
 		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("Invalid transaction: %v", err)}
 	}
 
+	// Check namespace permissions if sequencer is available
+	if s.sequencer != nil {
+		engine := s.sequencer.GetExecutionEngine()
+		if engine != nil {
+			ctx := context.Background()
+			if err := engine.ValidateNamespacePermission(ctx, l1Tx.Contract); err != nil {
+				return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("Namespace validation failed: %v", err)}
+			}
+		}
+	}
+
 	// Add to persistent mempool
 	hash, err := s.mempool.Add(l1Tx)
 	if err != nil {
@@ -656,6 +667,17 @@ func (s *Server) handleDeployContract(params interface{}) (interface{}, *RPCErro
 	// Basic WASM validation - check magic bytes
 	if len(wasmBytes) < 4 || string(wasmBytes[:4]) != "\x00asm" {
 		return nil, &RPCError{Code: -32602, Message: "Invalid WASM module: missing magic bytes"}
+	}
+
+	// Check namespace permissions if sequencer is available
+	if s.sequencer != nil {
+		engine := s.sequencer.GetExecutionEngine()
+		if engine != nil {
+			ctx := context.Background()
+			if err := engine.ValidateNamespacePermission(ctx, deployParams.Addr); err != nil {
+				return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("Namespace validation failed: %v", err)}
+			}
+		}
 	}
 
 	// Check if contract already exists

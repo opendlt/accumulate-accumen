@@ -6,12 +6,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
+	"github.com/opendlt/accumulate-accumen/internal/config"
+	"github.com/opendlt/accumulate-accumen/registry/dn"
+	"github.com/opendlt/accumulate-accumen/types/l1"
 )
 
 // Block represents a block of transactions
@@ -110,6 +114,10 @@ type ExecutionEngine struct {
 	limitTracker  *outputs.OperationLimitTracker
 	dnEndpoint    string
 
+	// Namespace management
+	namespaceManager *dn.NamespaceManager
+	namespaceConfig  *config.Namespace
+
 	// State management
 	currentHeight uint64
 	stateRoot     []byte
@@ -139,7 +147,7 @@ type workItem struct {
 }
 
 // NewExecutionEngine creates a new execution engine
-func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider, dnEndpoint string) (*ExecutionEngine, error) {
+func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider, dnEndpoint string, l0Querier *l0api.Querier, namespaceConfig *config.Namespace) (*ExecutionEngine, error) {
 	// Create WASM runtime
 	wasmRuntime, err := runtime.NewRuntime(&config.Runtime)
 	if err != nil {
@@ -163,6 +171,20 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 
 	gasMeter := gas.NewMeterWithConfig(gas.GasLimit(gasConfig.BaseGas*1000), &gasConfig)
 
+	// Initialize namespace manager if l0Querier is provided
+	var namespaceManager *dn.NamespaceManager
+	if l0Querier != nil {
+		namespaceManager = dn.NewNamespaceManager(l0Querier, nil)
+	}
+
+	// Set default namespace config if not provided
+	if namespaceConfig == nil {
+		namespaceConfig = &config.Namespace{
+			ReservedLabel: "accumen",
+			Enforce:       false,
+		}
+	}
+
 	engine := &ExecutionEngine{
 		config:           config,
 		runtime:          wasmRuntime,
@@ -173,6 +195,8 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 		scopeCache:       NewScopeCache(30 * time.Second), // Cache scopes for 30 seconds
 		limitTracker:     outputs.NewOperationLimitTracker(),
 		dnEndpoint:       dnEndpoint,
+		namespaceManager: namespaceManager,
+		namespaceConfig:  namespaceConfig,
 		currentHeight:    0,
 		stateRoot:        make([]byte, 32), // Genesis state root
 		workQueue:        make(chan *workItem, config.WorkerCount*2),
@@ -499,6 +523,26 @@ func (e *ExecutionEngine) GetStateRoot() []byte {
 	root := make([]byte, len(e.stateRoot))
 	copy(root, e.stateRoot)
 	return root
+}
+
+// ValidateNamespacePermission checks if a contract is allowed based on namespace rules
+func (e *ExecutionEngine) ValidateNamespacePermission(ctx context.Context, contractURL string) error {
+	// Skip validation if enforcement is disabled or namespace manager is not available
+	if !e.namespaceConfig.Enforce || e.namespaceManager == nil {
+		return nil
+	}
+
+	// Check if contract is allowed
+	allowed, reason, err := e.namespaceManager.ContractAllowed(ctx, contractURL)
+	if err != nil {
+		return fmt.Errorf("namespace validation failed: %w", err)
+	}
+
+	if !allowed {
+		return fmt.Errorf("namespace permission denied: %s", reason)
+	}
+
+	return nil
 }
 
 // GetStats returns execution engine statistics

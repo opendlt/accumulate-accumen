@@ -244,6 +244,155 @@ sequenceDiagram
 - **Audit Trail**: Complete transaction history
 - **Verification**: Cryptographic output verification
 
+## Namespace Policy & Registrar
+
+### Overview
+
+Accumen enforces reserved namespace rules to prevent unauthorized use of protected contract namespaces. The system integrates with the Accumulate Directory Network (DN) registry to validate contract deployment and execution permissions.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Namespace Enforcement                        │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
+│  │ RPC Server  │  │  Execution  │  │ Namespace   │            │
+│  │ Validation  │  │   Engine    │  │  Manager    │            │
+│  │             │  │ Validation  │  │             │            │
+│  └─────────────┘  └─────────────┘  └─────────────┘            │
+│         │                 │                 │                  │
+│         └─────────────────┼─────────────────┘                  │
+│                           │                                    │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │               DN Registry Integration               │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │   │
+│  │  │ Reserved    │  │ Contract    │  │   L0 API    │    │   │
+│  │  │Namespaces   │  │ Registry    │  │  Querier    │    │   │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────┤
+│                     Accumulate DN Registry                     │
+│  acc://dn.acme/accumen/namespaces/reserved                    │
+│  acc://dn.acme/accumen/contracts/[contract-url]               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Components
+
+#### 1. Namespace Manager (`registry/dn/namespace.go`)
+
+**Functions:**
+- `IsReservedNamespace(ctx, namespace) (bool, error)` - Checks if namespace is reserved
+- `ContractAllowed(ctx, contractURL) (bool, reason, error)` - Validates contract permissions
+
+**Registry Paths:**
+- **Reserved Namespaces**: `acc://dn.acme/accumen/namespaces/reserved`
+- **Contract Registry**: `acc://dn.acme/accumen/contracts/%s` (per-contract authorization)
+
+#### 2. Configuration (`internal/config/config.go`)
+
+```yaml
+namespace:
+  reservedLabel: "accumen"    # Default reserved namespace
+  enforce: false              # Enable/disable enforcement
+```
+
+**Configuration Options:**
+- `reservedLabel`: The namespace label to protect (default: "accumen")
+- `enforce`: Whether to enforce namespace restrictions (default: false)
+
+#### 3. Enforcement Points
+
+**Contract Deployment** (`internal/rpc/server.go`):
+- Validates namespace permissions before saving contract to store
+- Rejects deployment if contract URL uses reserved namespace without authorization
+
+**Transaction Execution** (`internal/rpc/server.go`):
+- Validates namespace permissions before adding transactions to mempool
+- Prevents execution of transactions targeting unauthorized contracts
+
+### Authorization Model
+
+#### Reserved Namespace Detection
+
+Namespace is extracted from contract URLs:
+- `acc://mycontract.accumen` → namespace: `accumen`
+- `acc://test.service` → namespace: `service`
+- `acc://simple` → no namespace (allowed)
+
+#### Authorization Flow
+
+1. **Extract Namespace**: Parse namespace from contract URL
+2. **Check Reserved List**: Query DN for reserved namespaces
+3. **If Not Reserved**: Allow deployment/execution
+4. **If Reserved**: Check contract registry for authorization
+5. **Authorization Status**:
+   - `authorized`: Explicitly permitted
+   - `denied`: Explicitly blocked
+   - `not_found`: No registry entry (blocked for reserved namespaces)
+
+#### Registry Entry Format
+
+**Reserved Namespaces List** (`acc://dn.acme/accumen/namespaces/reserved`):
+```
+accumen
+system
+admin
+```
+
+**Contract Authorization** (`acc://dn.acme/accumen/contracts/[contract-url]`):
+```
+status:authorized
+authorized_by:accumen-foundation
+reason:Core protocol contract
+expires:2025-12-31
+```
+
+### Security Model
+
+#### Threat Protection
+
+1. **Namespace Squatting**: Prevents unauthorized use of reserved namespaces
+2. **Brand Protection**: Protects official protocol namespaces
+3. **Registry Integrity**: Uses DN immutable registry for authorization records
+
+#### Access Control
+
+- **Permissionless Namespaces**: Anyone can deploy contracts to non-reserved namespaces
+- **Reserved Namespaces**: Require explicit authorization in DN registry
+- **Authorization Granularity**: Per-contract URL authorization
+- **Registry Updates**: Controlled by DN governance/authority
+
+### Operational Considerations
+
+#### Performance Impact
+
+- **Caching**: Registry queries cached for 30 seconds by default
+- **Fallback**: System allows deployment if DN is unreachable (configurable)
+- **Batch Validation**: Future enhancement for batch namespace validation
+
+#### Monitoring & Alerting
+
+- **Rejected Deployments**: Log namespace violations for monitoring
+- **Registry Access**: Monitor DN registry availability
+- **Authorization Changes**: Track registry updates and changes
+
+#### Configuration Management
+
+**Development Mode**: Disable enforcement for testing
+```yaml
+namespace:
+  enforce: false
+```
+
+**Production Mode**: Enable enforcement with monitoring
+```yaml
+namespace:
+  enforce: true
+  reservedLabel: "accumen"
+```
+
 ## Deployment Architecture
 
 ### Single Node Deployment
