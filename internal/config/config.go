@@ -52,6 +52,9 @@ type Config struct {
 		Type string `yaml:"type"` // "file" | "env" | "dev"
 		Key  string `yaml:"key"`  // path or env name or raw key (dev only)
 	} `yaml:"signer"`
+	Keystore struct {
+		Path string `yaml:"path"` // path to keystore directory
+	} `yaml:"keystore"`
 	Namespace struct {
 		ReservedLabel string `yaml:"reservedLabel"` // default "accumen"
 		Enforce       bool   `yaml:"enforce"`       // enforce namespace restrictions
@@ -251,6 +254,11 @@ func (c *Config) mergeProfile(profile *Config) {
 	if c.Credits.FundingToken == "" && profile.Credits.FundingToken != "" {
 		c.Credits.FundingToken = profile.Credits.FundingToken
 	}
+
+	// Merge keystore settings
+	if c.Keystore.Path == "" && profile.Keystore.Path != "" {
+		c.Keystore.Path = profile.Keystore.Path
+	}
 }
 
 // EffectiveNetwork returns the name of the effective network profile being used
@@ -392,6 +400,11 @@ func (c *Config) setDefaults() error {
 	}
 	if c.Credits.FundingToken == "" {
 		c.Credits.FundingToken = "acc://acme.acme/tokens" // Default ACME token URL
+	}
+
+	// Set default keystore configuration
+	if c.Keystore.Path == "" {
+		c.Keystore.Path = "keystore" // Default keystore directory
 	}
 
 	return nil
@@ -555,6 +568,11 @@ func (c *Config) validate() error {
 	}
 	if c.Credits.FundingToken == "" {
 		return fmt.Errorf("credits funding token URL cannot be empty")
+	}
+
+	// Validate keystore configuration
+	if c.Keystore.Path == "" {
+		return fmt.Errorf("keystore path cannot be empty")
 	}
 
 	return nil
