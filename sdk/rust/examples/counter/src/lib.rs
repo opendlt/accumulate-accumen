@@ -8,7 +8,7 @@
 #![no_main]
 
 use accumen_abi::{
-    Storage, Transaction, Gas, Log, Result, AccumenError,
+    Storage, Transaction, Gas, Log, L0, Result, AccumenError,
     Serialize, Deserialize, serde_json, log, ensure, export_main
 };
 
@@ -25,6 +25,8 @@ struct CounterState {
     pub last_tx_id: String,
     /// Block height when counter was last modified
     pub last_block_height: u64,
+    /// Configured token account URL for funding checks
+    pub funding_token_url: Option<String>,
 }
 
 impl Default for CounterState {
@@ -35,6 +37,7 @@ impl Default for CounterState {
             decrements: 0,
             last_tx_id: String::new(),
             last_block_height: 0,
+            funding_token_url: None,
         }
     }
 }
@@ -53,6 +56,10 @@ enum CounterCommand {
     Get,
     /// Reset the counter to zero
     Reset,
+    /// Configure the funding token account URL for balance checks
+    SetFundingToken { token_url: String },
+    /// Increment the counter only if the configured token account has sufficient balance
+    IncrementIfFunded { min_balance: String },
 }
 
 /// Response from counter operations
@@ -87,6 +94,7 @@ const GAS_COST_READ: u64 = 100;
 const GAS_COST_WRITE: u64 = 200;
 const GAS_COST_COMPUTE: u64 = 50;
 const GAS_COST_LOG: u64 = 25;
+const GAS_COST_L0_QUERY: u64 = 500;
 
 /// Load counter state from storage
 fn load_counter_state() -> Result<CounterState> {
@@ -318,6 +326,204 @@ fn handle_reset() -> Result<CounterResponse> {
     })
 }
 
+/// Handle set funding token command
+fn handle_set_funding_token(token_url: String) -> Result<CounterResponse> {
+    let mut state = load_counter_state()?;
+
+    Gas::consume(GAS_COST_COMPUTE)?;
+
+    // Validate the token URL format
+    if !token_url.starts_with("acc://") {
+        return Ok(CounterResponse {
+            success: false,
+            value: state.value,
+            stats: CounterStats {
+                increments: state.increments,
+                decrements: state.decrements,
+                last_tx_id: state.last_tx_id,
+                last_block_height: state.last_block_height,
+                total_operations: state.increments + state.decrements,
+            },
+            error: Some("Invalid token URL format".to_string()),
+        });
+    }
+
+    state.funding_token_url = Some(token_url.clone());
+    state.last_tx_id = Transaction::id()?;
+    state.last_block_height = accumen_abi::Block::height();
+
+    save_counter_state(&state)?;
+
+    log!(info, "Set funding token URL to: {}", token_url);
+
+    Ok(CounterResponse {
+        success: true,
+        value: state.value,
+        stats: CounterStats {
+            increments: state.increments,
+            decrements: state.decrements,
+            last_tx_id: state.last_tx_id.clone(),
+            last_block_height: state.last_block_height,
+            total_operations: state.increments + state.decrements,
+        },
+        error: None,
+    })
+}
+
+/// Handle increment if funded command
+fn handle_increment_if_funded(min_balance_str: String) -> Result<CounterResponse> {
+    let mut state = load_counter_state()?;
+
+    Gas::consume(GAS_COST_COMPUTE)?;
+
+    // Check if funding token URL is configured
+    let token_url = match &state.funding_token_url {
+        Some(url) => url.clone(),
+        None => {
+            return Ok(CounterResponse {
+                success: false,
+                value: state.value,
+                stats: CounterStats {
+                    increments: state.increments,
+                    decrements: state.decrements,
+                    last_tx_id: state.last_tx_id,
+                    last_block_height: state.last_block_height,
+                    total_operations: state.increments + state.decrements,
+                },
+                error: Some("No funding token URL configured. Use SetFundingToken first.".to_string()),
+            });
+        }
+    };
+
+    // Parse minimum balance as u128
+    let min_balance: u128 = match min_balance_str.parse() {
+        Ok(balance) => balance,
+        Err(_) => {
+            return Ok(CounterResponse {
+                success: false,
+                value: state.value,
+                stats: CounterStats {
+                    increments: state.increments,
+                    decrements: state.decrements,
+                    last_tx_id: state.last_tx_id,
+                    last_block_height: state.last_block_height,
+                    total_operations: state.increments + state.decrements,
+                },
+                error: Some("Invalid minimum balance format".to_string()),
+            });
+        }
+    };
+
+    log!(info, "Checking balance for token account: {}", token_url);
+    log!(info, "Required minimum balance: {}", min_balance);
+
+    // Query L0 balance
+    Gas::consume(GAS_COST_L0_QUERY)?;
+    let current_balance_str = match L0::get_balance(&token_url) {
+        Ok(balance) => {
+            log!(info, "Successfully queried L0 balance: {}", balance);
+            balance
+        },
+        Err(e) => {
+            log!(error, "Failed to query L0 balance: {}", e);
+            return Ok(CounterResponse {
+                success: false,
+                value: state.value,
+                stats: CounterStats {
+                    increments: state.increments,
+                    decrements: state.decrements,
+                    last_tx_id: state.last_tx_id,
+                    last_block_height: state.last_block_height,
+                    total_operations: state.increments + state.decrements,
+                },
+                error: Some(format!("Failed to query L0 balance: {}", e)),
+            });
+        }
+    };
+
+    // Parse current balance as u128
+    let current_balance: u128 = match current_balance_str.parse() {
+        Ok(balance) => balance,
+        Err(_) => {
+            return Ok(CounterResponse {
+                success: false,
+                value: state.value,
+                stats: CounterStats {
+                    increments: state.increments,
+                    decrements: state.decrements,
+                    last_tx_id: state.last_tx_id,
+                    last_block_height: state.last_block_height,
+                    total_operations: state.increments + state.decrements,
+                },
+                error: Some("Invalid balance format returned from L0".to_string()),
+            });
+        }
+    };
+
+    log!(info, "Current balance: {}, Required: {}", current_balance, min_balance);
+
+    // Check if balance is sufficient
+    if current_balance < min_balance {
+        log!(warn, "Insufficient balance: {} < {}", current_balance, min_balance);
+        return Ok(CounterResponse {
+            success: false,
+            value: state.value,
+            stats: CounterStats {
+                increments: state.increments,
+                decrements: state.decrements,
+                last_tx_id: state.last_tx_id,
+                last_block_height: state.last_block_height,
+                total_operations: state.increments + state.decrements,
+            },
+            error: Some(format!("Insufficient balance: {} < {}", current_balance, min_balance)),
+        });
+    }
+
+    // Balance is sufficient, proceed with increment
+    log!(info, "Balance check passed, proceeding with increment");
+
+    let old_value = state.value;
+
+    // Check for overflow
+    if state.value >= i64::MAX {
+        return Ok(CounterResponse {
+            success: false,
+            value: state.value,
+            stats: CounterStats {
+                increments: state.increments,
+                decrements: state.decrements,
+                last_tx_id: state.last_tx_id,
+                last_block_height: state.last_block_height,
+                total_operations: state.increments + state.decrements,
+            },
+            error: Some("Integer overflow".to_string()),
+        });
+    }
+
+    state.value += 1;
+    state.increments += 1;
+    state.last_tx_id = Transaction::id()?;
+    state.last_block_height = accumen_abi::Block::height();
+
+    save_counter_state(&state)?;
+    log_operation("increment_if_funded", old_value, state.value)?;
+
+    log!(info, "Funded increment successful: {} -> {} (balance: {})", old_value, state.value, current_balance);
+
+    Ok(CounterResponse {
+        success: true,
+        value: state.value,
+        stats: CounterStats {
+            increments: state.increments,
+            decrements: state.decrements,
+            last_tx_id: state.last_tx_id.clone(),
+            last_block_height: state.last_block_height,
+            total_operations: state.increments + state.decrements,
+        },
+        error: None,
+    })
+}
+
 /// Main entry point for the counter contract
 fn counter_main() -> Result<()> {
     log!(info, "Counter contract started");
@@ -339,6 +545,8 @@ fn counter_main() -> Result<()> {
         CounterCommand::Set { value } => handle_set(value)?,
         CounterCommand::Get => handle_get()?,
         CounterCommand::Reset => handle_reset()?,
+        CounterCommand::SetFundingToken { token_url } => handle_set_funding_token(token_url)?,
+        CounterCommand::IncrementIfFunded { min_balance } => handle_increment_if_funded(min_balance)?,
     };
 
     // Store the response in a well-known location for the caller to retrieve
