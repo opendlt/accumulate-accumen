@@ -714,6 +714,185 @@ namespace:
 - **Concurrent Connections**: 10k+ API connections
 - **WASM Modules**: 1000+ loaded contracts
 
+## Upgradeable Contracts & Migrations
+
+Accumen supports versioned contract upgrades with optional migration functions, enabling safe evolution of smart contracts while maintaining backward compatibility and data integrity.
+
+### Version Management
+
+#### Contract Versioning
+Each contract can have multiple versions stored simultaneously:
+- **Version numbering**: Sequential integers starting from 1
+- **Version metadata**: Includes WASM hash, creation timestamp, and activation status
+- **Active version**: Only one version can be active at a time
+- **Version storage**: Supports both file-based (BadgerDB) and in-memory storage
+
+#### Storage Schema
+```
+contract:versions:{addr} -> ContractVersions {
+  address: string
+  active_version: int
+  latest_version: int
+  versions: []{
+    version: int
+    wasm_hash: string
+    path: string (file-based only)
+    created_at: timestamp
+    active: bool
+  }
+}
+```
+
+### Upgrade Process
+
+#### 1. Upload New Version
+```bash
+POST /rpc
+{
+  "method": "accumen.upgradeContract",
+  "params": {
+    "addr": "acc://counter.acme",
+    "wasm_b64": "base64-encoded-wasm",
+    "migrate_entry": "migrate_v2", // optional
+    "migrate_args": {"param": "value"} // optional
+  }
+}
+```
+
+**Process:**
+1. **L0 Authority Check**: Validates namespace permissions via Accumulate network
+2. **WASM Audit**: Comprehensive determinism analysis (floats, SIMD, threads forbidden)
+3. **Version Storage**: Saves new version with incremented version number
+4. **Migration Execution**: Executes migration function if specified
+5. **Rollback Safety**: Automatic state restoration on migration failure
+
+#### 2. Activate Version
+```bash
+POST /rpc
+{
+  "method": "accumen.activateVersion",
+  "params": {
+    "addr": "acc://counter.acme",
+    "version": 2
+  }
+}
+```
+
+**Process:**
+1. **L0 Authority Check**: Validates namespace permissions
+2. **Version Validation**: Ensures target version exists
+3. **Activation**: Atomically switches active version
+4. **State Consistency**: Maintains contract state across version changes
+
+### Migration Functions
+
+#### Migration Execution
+Migrations run in **Execute mode** with full state access:
+- **Atomic execution**: Success/failure is all-or-nothing
+- **State snapshots**: Automatic rollback on failure
+- **Gas metering**: Standard gas limits apply
+- **Event emission**: Migration events for debugging
+
+#### Migration Function Signature
+```rust
+// Example migration function in contract
+pub fn migrate_v2(old_version: u32, params: MigrationParams) -> Result<(), String> {
+    // Migration logic here
+    // Can read/write state, emit events
+    // Must handle version compatibility
+    Ok(())
+}
+```
+
+#### Rollback Mechanism
+If migration fails:
+1. **State snapshot**: Complete state backup before migration
+2. **Execution failure**: Migration function error or gas exhaustion
+3. **Automatic rollback**: Restore pre-migration state
+4. **Version cleanup**: Remove failed version from storage
+5. **Error reporting**: Detailed failure information returned
+
+### Security & Authority
+
+#### L0 Authority Gating
+All upgrade operations require valid L0 authority:
+- **Namespace validation**: Contract address must match authorized namespace
+- **Key book verification**: Signatures validated against Accumulate network
+- **Authority binding**: Enforced through Accumulate's authority system
+
+#### WASM Security
+Every uploaded version undergoes comprehensive audit:
+- **Determinism validation**: Forbidden operations detected and rejected
+- **Resource limits**: Memory and table size constraints
+- **Import restrictions**: Only approved host functions allowed
+- **Float operations**: Completely forbidden for deterministic execution
+
+### Migration Patterns
+
+#### Safe Migration Practices
+1. **Version compatibility checks** in migration functions
+2. **Gradual state transformation** for large datasets
+3. **Event emission** for migration progress tracking
+4. **Error handling** with descriptive failure messages
+
+#### Example Migration Scenarios
+- **Schema updates**: Add new fields to state structures
+- **Algorithm changes**: Update contract logic while preserving data
+- **Security fixes**: Patch vulnerabilities without data loss
+- **Feature additions**: Extend functionality while maintaining compatibility
+
+### Implementation Details
+
+#### Contract Store Interface
+```go
+// Core versioning methods
+SaveVersion(addr string, wasm []byte) (version int, hash [32]byte, error)
+ActivateVersion(addr string, version int) error
+ActiveVersionMeta(addr string) (*VersionMeta, error)
+GetVersionModule(addr string, version int) ([]byte, [32]byte, error)
+ListVersions(addr string) (*ContractVersions, error)
+```
+
+#### Execution Engine Interface
+```go
+// Migration execution
+ExecuteMigration(ctx context.Context, contractAddr string, version int,
+                migrateEntry string, migrateArgs map[string]interface{}) error
+```
+
+#### State Management
+- **Snapshot creation**: Complete state backup for rollback
+- **Atomic operations**: All-or-nothing state transitions
+- **Isolation**: Migration state changes isolated until success
+
+### Error Handling
+
+#### Migration Failures
+- **Execution errors**: Runtime failures in migration function
+- **Gas exhaustion**: Migration exceeds gas limits
+- **State conflicts**: Concurrent access issues
+- **Authority failures**: L0 permission denials
+
+#### Recovery Mechanisms
+- **Automatic rollback**: State restoration on any failure
+- **Detailed logging**: Comprehensive error information
+- **Version preservation**: Failed versions remain for debugging
+- **Retry capability**: Migrations can be re-attempted with fixes
+
+### Best Practices
+
+#### Contract Development
+1. **Design for upgradability**: Plan version compatibility from start
+2. **Migration testing**: Thoroughly test migration functions
+3. **State versioning**: Include version metadata in state structures
+4. **Backward compatibility**: Maintain compatibility where possible
+
+#### Deployment Strategy
+1. **Staged rollouts**: Test on development networks first
+2. **Migration validation**: Verify migration logic thoroughly
+3. **Authority management**: Secure control of namespace keys
+4. **Monitoring**: Track migration success and contract health
+
 ## Future Enhancements
 
 ### Short Term
