@@ -21,6 +21,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
+	"github.com/opendlt/accumulate-accumen/internal/crypto/keystore"
 )
 
 var (
@@ -45,6 +46,7 @@ func main() {
 		submitCommand(),
 		queryCommand(),
 		keysCommand(),
+		keystoreCommand(),
 		scopeCommand(),
 	)
 
@@ -478,6 +480,243 @@ func formatTimePtr(t *time.Time) interface{} {
 		return nil
 	}
 	return t.Format(time.RFC3339)
+}
+
+// keystoreCommand creates the keystore command with subcommands
+func keystoreCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "keystore",
+		Short: "Keystore management commands",
+		Long:  "Manage encrypted keystore for Ed25519 keys with aliases",
+	}
+
+	cmd.AddCommand(
+		keystoreInitCommand(),
+		keystoreGenCommand(),
+		keystoreImportCommand(),
+		keystoreListCommand(),
+	)
+
+	return cmd
+}
+
+// keystoreInitCommand creates the keystore init subcommand
+func keystoreInitCommand() *cobra.Command {
+	var path string
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Initialize a new keystore",
+		Long:  "Initialize a new keystore at the specified path",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if path == "" {
+				return fmt.Errorf("--path is required")
+			}
+
+			// Create the keystore
+			ks, err := keystore.New(path)
+			if err != nil {
+				return fmt.Errorf("failed to initialize keystore: %v", err)
+			}
+
+			prettyPrint(map[string]interface{}{
+				"success":     true,
+				"keystore_path": ks.Path(),
+				"message":     "Keystore initialized successfully",
+				"note":        "Keys will be encrypted using OS-specific user information",
+			})
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&path, "path", "", "Path to keystore directory (required)")
+	cmd.MarkFlagRequired("path")
+
+	return cmd
+}
+
+// keystoreGenCommand creates the keystore gen subcommand
+func keystoreGenCommand() *cobra.Command {
+	var keystorePath string
+	var alias string
+
+	cmd := &cobra.Command{
+		Use:   "gen",
+		Short: "Generate a new key in the keystore",
+		Long:  "Generate a new Ed25519 key pair and store it in the keystore with the given alias",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if keystorePath == "" {
+				return fmt.Errorf("--keystore is required")
+			}
+			if alias == "" {
+				return fmt.Errorf("--alias is required")
+			}
+
+			// Open the keystore
+			ks, err := keystore.New(keystorePath)
+			if err != nil {
+				return fmt.Errorf("failed to open keystore: %v", err)
+			}
+
+			// Generate new key
+			if err := ks.Create(alias); err != nil {
+				return fmt.Errorf("failed to generate key: %v", err)
+			}
+
+			// Get the public key for display
+			pubKey, err := ks.GetPublicKey(alias)
+			if err != nil {
+				return fmt.Errorf("failed to get public key: %v", err)
+			}
+
+			pubKeyHash, err := ks.PubKeyHash(alias)
+			if err != nil {
+				return fmt.Errorf("failed to get public key hash: %v", err)
+			}
+
+			prettyPrint(map[string]interface{}{
+				"success":        true,
+				"alias":          alias,
+				"public_key":     hex.EncodeToString(pubKey),
+				"public_key_hash": hex.EncodeToString(pubKeyHash),
+				"keystore":       keystorePath,
+				"note":           "Private key is securely stored in the keystore",
+			})
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&keystorePath, "keystore", "", "Path to keystore directory (required)")
+	cmd.Flags().StringVar(&alias, "alias", "", "Key alias (required)")
+	cmd.MarkFlagRequired("keystore")
+	cmd.MarkFlagRequired("alias")
+
+	return cmd
+}
+
+// keystoreImportCommand creates the keystore import subcommand
+func keystoreImportCommand() *cobra.Command {
+	var keystorePath string
+	var alias string
+	var privHex string
+
+	cmd := &cobra.Command{
+		Use:   "import",
+		Short: "Import a private key into the keystore",
+		Long:  "Import an existing Ed25519 private key (in hex format) into the keystore with the given alias",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if keystorePath == "" {
+				return fmt.Errorf("--keystore is required")
+			}
+			if alias == "" {
+				return fmt.Errorf("--alias is required")
+			}
+			if privHex == "" {
+				return fmt.Errorf("--priv is required")
+			}
+
+			// Open the keystore
+			ks, err := keystore.New(keystorePath)
+			if err != nil {
+				return fmt.Errorf("failed to open keystore: %v", err)
+			}
+
+			// Import the key
+			if err := ks.Import(alias, privHex); err != nil {
+				return fmt.Errorf("failed to import key: %v", err)
+			}
+
+			// Get the public key for display
+			pubKey, err := ks.GetPublicKey(alias)
+			if err != nil {
+				return fmt.Errorf("failed to get public key: %v", err)
+			}
+
+			pubKeyHash, err := ks.PubKeyHash(alias)
+			if err != nil {
+				return fmt.Errorf("failed to get public key hash: %v", err)
+			}
+
+			prettyPrint(map[string]interface{}{
+				"success":         true,
+				"alias":           alias,
+				"public_key":      hex.EncodeToString(pubKey),
+				"public_key_hash": hex.EncodeToString(pubKeyHash),
+				"keystore":        keystorePath,
+				"message":         "Private key imported and encrypted successfully",
+			})
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&keystorePath, "keystore", "", "Path to keystore directory (required)")
+	cmd.Flags().StringVar(&alias, "alias", "", "Key alias (required)")
+	cmd.Flags().StringVar(&privHex, "priv", "", "Private key in hex format (required)")
+	cmd.MarkFlagRequired("keystore")
+	cmd.MarkFlagRequired("alias")
+	cmd.MarkFlagRequired("priv")
+
+	return cmd
+}
+
+// keystoreListCommand creates the keystore list subcommand
+func keystoreListCommand() *cobra.Command {
+	var keystorePath string
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all keys in the keystore",
+		Long:  "List all key aliases and their public keys stored in the keystore",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if keystorePath == "" {
+				return fmt.Errorf("--keystore is required")
+			}
+
+			// Open the keystore
+			ks, err := keystore.New(keystorePath)
+			if err != nil {
+				return fmt.Errorf("failed to open keystore: %v", err)
+			}
+
+			// List all keys
+			entries := ks.List()
+			if len(entries) == 0 {
+				prettyPrint(map[string]interface{}{
+					"keystore": keystorePath,
+					"keys":     []interface{}{},
+					"message":  "No keys found in keystore",
+				})
+				return nil
+			}
+
+			// Format entries for display
+			keys := make([]map[string]interface{}, len(entries))
+			for i, entry := range entries {
+				keys[i] = map[string]interface{}{
+					"alias":           entry.Alias,
+					"public_key":      entry.PubKeyHex,
+					"public_key_hash": entry.PubKeyHash,
+					"created_at":      entry.CreatedAt.Format(time.RFC3339),
+				}
+			}
+
+			prettyPrint(map[string]interface{}{
+				"keystore":  keystorePath,
+				"key_count": len(entries),
+				"keys":      keys,
+			})
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&keystorePath, "keystore", "", "Path to keystore directory (required)")
+	cmd.MarkFlagRequired("keystore")
+
+	return cmd
 }
 
 // scopeCommand creates the scope command with subcommands
