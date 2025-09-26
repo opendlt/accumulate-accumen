@@ -34,6 +34,16 @@ pub enum AccumenError {
     Aborted(String),
     #[error("Serialization error: {0}")]
     SerializationError(String),
+    #[error("L0 query failed")]
+    L0QueryFailed,
+    #[error("Account not found: {0}")]
+    AccountNotFound(String),
+    #[error("Data entry not found")]
+    DataEntryNotFound,
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+    #[error("No pricing schedule available")]
+    NoPricingSchedule,
 }
 
 pub type Result<T> = core::result::Result<T, AccumenError>;
@@ -117,6 +127,19 @@ extern "C" {
 
     /// Abort execution with error message
     fn accuwasm_abort(msg_ptr: *const u8, msg_len: u32) -> !;
+
+    // L0 state reading functions
+    /// Read account data from L0 and return JSON bytes
+    fn l0_read_account_json(url_ptr: *const u8, url_len: u32, output_ptr: *mut u8, output_len_ptr: *mut u32) -> u32;
+
+    /// Get the balance of a token account as a decimal string
+    fn l0_get_balance(url_ptr: *const u8, url_len: u32, output_ptr: *mut u8, output_len_ptr: *mut u32) -> u32;
+
+    /// Read a data entry from an L0 data account
+    fn l0_read_data_entry(url_ptr: *const u8, url_len: u32, key_ptr: *const u8, key_len: u32, output_ptr: *mut u8, output_len_ptr: *mut u32) -> u32;
+
+    /// Calculate credits required for gas and ACME cost
+    fn l0_credits_quote(gas: u64, credits_ptr: *mut u64, acme_ptr: *mut u8, acme_len_ptr: *mut u32) -> u32;
 }
 
 /// Safe wrapper for key-value store operations
@@ -471,9 +494,147 @@ macro_rules! export_main {
     };
 }
 
+/// L0 state reading functions
+pub struct L0;
+
+impl L0 {
+    /// Read account data from L0 and return as JSON bytes
+    pub fn read_account_json(url: &str) -> Result<Vec<u8>> {
+        let mut buffer = vec![0u8; 8192]; // 8KB buffer for account JSON
+        let mut output_len: u32 = 0;
+
+        let result = unsafe {
+            l0_read_account_json(
+                url.as_ptr(),
+                url.len() as u32,
+                buffer.as_mut_ptr(),
+                &mut output_len as *mut u32,
+            )
+        };
+
+        match result {
+            0 => {
+                buffer.truncate(output_len as usize);
+                Ok(buffer)
+            }
+            _ => Err(AccumenError::L0QueryFailed),
+        }
+    }
+
+    /// Get the balance of a token account as a decimal string
+    pub fn get_balance(token_url: &str) -> Result<String> {
+        let mut buffer = vec![0u8; 64]; // u128 decimal string fits in 64 bytes
+        let mut output_len: u32 = 0;
+
+        let result = unsafe {
+            l0_get_balance(
+                token_url.as_ptr(),
+                token_url.len() as u32,
+                buffer.as_mut_ptr(),
+                &mut output_len as *mut u32,
+            )
+        };
+
+        match result {
+            0 => {
+                buffer.truncate(output_len as usize);
+                String::from_utf8(buffer)
+                    .map_err(|_| AccumenError::SerializationError("Invalid UTF-8 in balance".to_string()))
+            }
+            _ => Err(AccumenError::L0QueryFailed),
+        }
+    }
+
+    /// Read a data entry from an L0 data account
+    pub fn read_data_entry(data_url: &str, key: &str) -> Result<Vec<u8>> {
+        let mut buffer = vec![0u8; 4096]; // 4KB buffer for data entries
+        let mut output_len: u32 = 0;
+
+        let result = unsafe {
+            l0_read_data_entry(
+                data_url.as_ptr(),
+                data_url.len() as u32,
+                key.as_ptr(),
+                key.len() as u32,
+                buffer.as_mut_ptr(),
+                &mut output_len as *mut u32,
+            )
+        };
+
+        match result {
+            0 => {
+                buffer.truncate(output_len as usize);
+                Ok(buffer)
+            }
+            _ => Err(AccumenError::DataEntryNotFound),
+        }
+    }
+
+    /// Calculate credits required for gas and return credits and ACME cost
+    pub fn credits_quote(gas: u64) -> Result<(u64, String)> {
+        let mut credits: u64 = 0;
+        let mut acme_buffer = vec![0u8; 32]; // Decimal string for ACME amount
+        let mut acme_len: u32 = 0;
+
+        let result = unsafe {
+            l0_credits_quote(
+                gas,
+                &mut credits as *mut u64,
+                acme_buffer.as_mut_ptr(),
+                &mut acme_len as *mut u32,
+            )
+        };
+
+        match result {
+            0 => {
+                acme_buffer.truncate(acme_len as usize);
+                let acme_str = String::from_utf8(acme_buffer)
+                    .map_err(|_| AccumenError::SerializationError("Invalid UTF-8 in ACME amount".to_string()))?;
+                Ok((credits, acme_str))
+            }
+            _ => Err(AccumenError::NoPricingSchedule),
+        }
+    }
+
+    /// Parse account JSON into a structured type
+    pub fn read_account_parsed<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T> {
+        let json_bytes = Self::read_account_json(url)?;
+        serde_json::from_slice(&json_bytes)
+            .map_err(|e| AccumenError::SerializationError(e.to_string()))
+    }
+
+    /// Get balance as a parsed big integer (requires num-bigint feature)
+    #[cfg(feature = "bigint")]
+    pub fn get_balance_bigint(token_url: &str) -> Result<num_bigint::BigUint> {
+        use num_bigint::BigUint;
+        use core::str::FromStr;
+
+        let balance_str = Self::get_balance(token_url)?;
+        BigUint::from_str(&balance_str)
+            .map_err(|_| AccumenError::SerializationError("Invalid balance format".to_string()))
+    }
+
+    /// Read data entry as UTF-8 string
+    pub fn read_data_entry_string(data_url: &str, key: &str) -> Result<String> {
+        let data_bytes = Self::read_data_entry(data_url, key)?;
+        String::from_utf8(data_bytes)
+            .map_err(|_| AccumenError::SerializationError("Invalid UTF-8 in data entry".to_string()))
+    }
+
+    /// Read data entry as JSON-parsed structure
+    pub fn read_data_entry_json<T: for<'de> Deserialize<'de>>(data_url: &str, key: &str) -> Result<T> {
+        let data_bytes = Self::read_data_entry(data_url, key)?;
+        serde_json::from_slice(&data_bytes)
+            .map_err(|e| AccumenError::SerializationError(e.to_string()))
+    }
+}
+
 // Re-export commonly used types
 pub use serde::{Deserialize, Serialize};
 pub use serde_json;
+
+#[cfg(feature = "bigint")]
+pub use num_bigint;
 
 #[cfg(test)]
 mod tests {

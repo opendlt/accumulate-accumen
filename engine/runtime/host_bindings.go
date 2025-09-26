@@ -2,11 +2,19 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
+
+	"github.com/opendlt/accumulate-accumen/bridge/l0api"
+	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/host"
+	"github.com/opendlt/accumulate-accumen/internal/accutil"
 )
 
 // RegisterHostBindings registers all AccuWASM host functions with the given module builder
@@ -370,6 +378,312 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 			execContext.events = append(execContext.events, event)
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
 		Export("emit_event")
+
+	// L0 read-only functions for safely querying L0 state
+	builder.NewFunctionBuilder().
+		WithName("l0_read_account_json").
+		WithParameterNames("url_ptr", "url_len", "output_ptr", "output_len_ptr").
+		WithResultNames("result").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge base gas for L0 query operation
+			if !gasMeter.TryConsume(gas.GasCost(500)) {
+				stack[0] = 1 // Error
+				return
+			}
+
+			urlPtr := uint32(stack[0])
+			urlLen := uint32(stack[1])
+			outputPtr := uint32(stack[2])
+			outputLenPtr := uint32(stack[3])
+
+			// Read URL from memory
+			memory := mod.Memory()
+			urlBytes, ok := memory.Read(urlPtr, urlLen)
+			if !ok {
+				stack[0] = 1 // Error
+				return
+			}
+
+			// Parse URL
+			accountURL, err := accutil.ParseURL(string(urlBytes))
+			if err != nil {
+				stack[0] = 1 // Error
+				return
+			}
+
+			// Query account from L0 (requires querier in execution context)
+			if execContext.querier == nil {
+				stack[0] = 1 // No querier available
+				return
+			}
+
+			accountRecord, err := execContext.querier.QueryAccount(ctx, accountURL)
+			if err != nil {
+				stack[0] = 1 // Query failed
+				return
+			}
+
+			// Marshal to JSON
+			jsonBytes, err := json.Marshal(accountRecord.Account)
+			if err != nil {
+				stack[0] = 1 // Marshal error
+				return
+			}
+
+			// Charge gas based on bytes returned
+			if execContext.schedule != nil {
+				gasPerByte := execContext.schedule.PerByte.Read
+				gasCost := uint64(len(jsonBytes)) * gasPerByte
+				if !gasMeter.TryConsume(gas.GasCost(gasCost)) {
+					stack[0] = 1 // Out of gas
+					return
+				}
+			} else {
+				// Fallback gas cost
+				if !gasMeter.TryConsume(gas.GasCost(uint64(len(jsonBytes)))) {
+					stack[0] = 1 // Out of gas
+					return
+				}
+			}
+
+			// Write length to output length pointer
+			if !memory.WriteUint32Le(outputLenPtr, uint32(len(jsonBytes))) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			// Write JSON data to output buffer
+			if !memory.Write(outputPtr, jsonBytes) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			stack[0] = 0 // Success
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("l0_read_account_json")
+
+	builder.NewFunctionBuilder().
+		WithName("l0_get_balance").
+		WithParameterNames("url_ptr", "url_len", "output_ptr", "output_len_ptr").
+		WithResultNames("result").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge base gas for L0 query operation
+			if !gasMeter.TryConsume(gas.GasCost(300)) {
+				stack[0] = 1 // Error
+				return
+			}
+
+			urlPtr := uint32(stack[0])
+			urlLen := uint32(stack[1])
+			outputPtr := uint32(stack[2])
+			outputLenPtr := uint32(stack[3])
+
+			// Read URL from memory
+			memory := mod.Memory()
+			urlBytes, ok := memory.Read(urlPtr, urlLen)
+			if !ok {
+				stack[0] = 1 // Error
+				return
+			}
+
+			// Parse URL
+			tokenURL, err := accutil.ParseURL(string(urlBytes))
+			if err != nil {
+				stack[0] = 1 // Error
+				return
+			}
+
+			// Query token account from L0
+			if execContext.querier == nil {
+				stack[0] = 1 // No querier available
+				return
+			}
+
+			accountRecord, err := execContext.querier.QueryAccount(ctx, tokenURL)
+			if err != nil {
+				stack[0] = 1 // Query failed
+				return
+			}
+
+			var balanceStr string
+			switch acc := accountRecord.Account.(type) {
+			case *protocol.TokenAccount:
+				balanceStr = acc.Balance.String()
+			case *protocol.LiteTokenAccount:
+				balanceStr = acc.Balance.String()
+			default:
+				stack[0] = 1 // Not a token account
+				return
+			}
+
+			balanceBytes := []byte(balanceStr)
+
+			// Charge gas for read operation
+			if execContext.schedule != nil {
+				gasPerByte := execContext.schedule.PerByte.Read
+				gasCost := uint64(len(balanceBytes)) * gasPerByte
+				if !gasMeter.TryConsume(gas.GasCost(gasCost)) {
+					stack[0] = 1 // Out of gas
+					return
+				}
+			}
+
+			// Write length to output length pointer
+			if !memory.WriteUint32Le(outputLenPtr, uint32(len(balanceBytes))) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			// Write balance string to output buffer
+			if !memory.Write(outputPtr, balanceBytes) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			stack[0] = 0 // Success
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("l0_get_balance")
+
+	builder.NewFunctionBuilder().
+		WithName("l0_read_data_entry").
+		WithParameterNames("url_ptr", "url_len", "key_ptr", "key_len", "output_ptr", "output_len_ptr").
+		WithResultNames("result").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge base gas for L0 query operation
+			if !gasMeter.TryConsume(gas.GasCost(400)) {
+				stack[0] = 1 // Error
+				return
+			}
+
+			urlPtr := uint32(stack[0])
+			urlLen := uint32(stack[1])
+			keyPtr := uint32(stack[2])
+			keyLen := uint32(stack[3])
+			outputPtr := uint32(stack[4])
+			outputLenPtr := uint32(stack[5])
+
+			// Read URL and key from memory
+			memory := mod.Memory()
+			urlBytes, ok := memory.Read(urlPtr, urlLen)
+			if !ok {
+				stack[0] = 1 // Error
+				return
+			}
+
+			keyBytes, ok := memory.Read(keyPtr, keyLen)
+			if !ok {
+				stack[0] = 1 // Error
+				return
+			}
+
+			// Parse URL
+			dataURL, err := accutil.ParseURL(string(urlBytes))
+			if err != nil {
+				stack[0] = 1 // Error
+				return
+			}
+
+			// Query data entry from L0
+			if execContext.querier == nil {
+				stack[0] = 1 // No querier available
+				return
+			}
+
+			entryRecord, err := execContext.querier.QueryDataEntry(ctx, dataURL, string(keyBytes))
+			if err != nil {
+				stack[0] = 1 // Entry not found or other error
+				return
+			}
+
+			var dataBytes []byte
+			if entryRecord != nil && entryRecord.Entry != nil {
+				dataBytes = entryRecord.Entry.GetData()
+			}
+
+			// Charge gas based on bytes read
+			if execContext.schedule != nil {
+				gasPerByte := execContext.schedule.PerByte.Read
+				gasCost := uint64(len(dataBytes)) * gasPerByte
+				if !gasMeter.TryConsume(gas.GasCost(gasCost)) {
+					stack[0] = 1 // Out of gas
+					return
+				}
+			} else {
+				if !gasMeter.TryConsume(gas.GasCost(uint64(len(dataBytes)))) {
+					stack[0] = 1 // Out of gas
+					return
+				}
+			}
+
+			// Write length to output length pointer
+			if !memory.WriteUint32Le(outputLenPtr, uint32(len(dataBytes))) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			// Write data to output buffer
+			if !memory.Write(outputPtr, dataBytes) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			stack[0] = 0 // Success
+		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("l0_read_data_entry")
+
+	builder.NewFunctionBuilder().
+		WithName("l0_credits_quote").
+		WithParameterNames("gas", "credits_ptr", "acme_ptr", "acme_len_ptr").
+		WithResultNames("result").
+		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
+			// Charge base gas for calculation
+			if !gasMeter.TryConsume(gas.GasCost(50)) {
+				stack[0] = 1 // Error
+				return
+			}
+
+			gasAmount := stack[0]
+			creditsPtr := uint32(stack[1])
+			acmePtr := uint32(stack[2])
+			acmeLenPtr := uint32(stack[3])
+
+			// Check if pricing schedule is available
+			if execContext.schedule == nil {
+				stack[0] = 1 // No pricing schedule available
+				return
+			}
+
+			// Calculate credits using the pricing schedule
+			credits := execContext.schedule.CalculateCredits(gasAmount)
+
+			// Calculate ACME required
+			acmeRequired := float64(credits) / execContext.schedule.GCR
+			acmeStr := fmt.Sprintf("%.8f", acmeRequired)
+			acmeBytes := []byte(acmeStr)
+
+			memory := mod.Memory()
+
+			// Write credits as u64
+			if !memory.WriteUint64Le(creditsPtr, credits) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			// Write ACME length
+			if !memory.WriteUint32Le(acmeLenPtr, uint32(len(acmeBytes))) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			// Write ACME decimal string
+			if !memory.Write(acmePtr, acmeBytes) {
+				stack[0] = 1 // Memory write error
+				return
+			}
+
+			stack[0] = 0 // Success
+		}), []api.ValueType{api.ValueTypeI64, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32}).
+		Export("l0_credits_quote")
 
 	return nil
 }
