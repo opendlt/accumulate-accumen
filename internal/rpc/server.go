@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
+	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 	"github.com/opendlt/accumulate-accumen/follower/indexer"
@@ -749,9 +750,10 @@ func (s *Server) handleDeployContract(params interface{}) (interface{}, *RPCErro
 		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM module too large: %d bytes (max: %d)", len(wasmBytes), maxSize)}
 	}
 
-	// Basic WASM validation - check magic bytes
-	if len(wasmBytes) < 4 || string(wasmBytes[:4]) != "\x00asm" {
-		return nil, &RPCError{Code: -32602, Message: "Invalid WASM module: missing magic bytes"}
+	// Comprehensive WASM audit for determinism
+	auditReport := runtime.AuditWASMModule(wasmBytes)
+	if !auditReport.Ok {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM audit failed: %s", strings.Join(auditReport.Reasons, "; "))}
 	}
 
 	// Check namespace permissions if sequencer is available
