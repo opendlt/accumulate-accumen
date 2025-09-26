@@ -249,12 +249,12 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 			accountBytes, _ := memory.Read(accountPtr, accountLen)
 			dataBytes, _ := memory.Read(dataPtr, dataLen)
 
-			// Stage L0 operation
-			op := &StagedOp{
-				Type:    "write_data",
-				Account: string(accountBytes),
-				Data:    dataBytes,
+			// Stage L0 operation using URL-based constructor
+			op, err := NewStagedOp("write_data", string(accountBytes))
+			if err != nil {
+				panic("l0_write_data: invalid account URL: " + err.Error())
 			}
+			op.Data = dataBytes
 			execContext.stagedOps = append(execContext.stagedOps, op)
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
 		Export("l0_write_data")
@@ -279,12 +279,10 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 			fromBytes, _ := memory.Read(fromPtr, fromLen)
 			toBytes, _ := memory.Read(toPtr, toLen)
 
-			// Stage L0 operation
-			op := &StagedOp{
-				Type:    "send_tokens",
-				From:    string(fromBytes),
-				To:      string(toBytes),
-				Amount:  amount,
+			// Stage L0 operation using URL-based constructor
+			op, err := NewTokenSendOp(string(fromBytes), string(toBytes), amount)
+			if err != nil {
+				panic("l0_send_tokens: invalid URLs: " + err.Error())
 			}
 			execContext.stagedOps = append(execContext.stagedOps, op)
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI64}, []api.ValueType{}).
@@ -309,12 +307,12 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 			accountBytes, _ := memory.Read(accountPtr, accountLen)
 			authBytes, _ := memory.Read(authPtr, authLen)
 
-			// Stage L0 operation
-			op := &StagedOp{
-				Type:    "update_auth",
-				Account: string(accountBytes),
-				Data:    authBytes,
+			// Stage L0 operation using URL-based constructor
+			op, err := NewStagedOp("update_auth", string(accountBytes))
+			if err != nil {
+				panic("l0_update_auth: invalid account URL: " + err.Error())
 			}
+			op.Data = authBytes
 			execContext.stagedOps = append(execContext.stagedOps, op)
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
 		Export("l0_update_auth")
@@ -665,12 +663,12 @@ func registerL0Functions(ctx context.Context, builder wazero.HostModuleBuilder, 
 			accountBytes, _ := memory.Read(accountPtr, accountLen)
 			dataBytes, _ := memory.Read(dataPtr, dataLen)
 
-			// Stage L0 operation
-			op := &StagedOp{
-				Type:    "write_data",
-				Account: string(accountBytes),
-				Data:    dataBytes,
+			// Stage L0 operation using URL-based constructor
+			op, err := NewStagedOp("write_data", string(accountBytes))
+			if err != nil {
+				panic("l0_write_data: invalid account URL: " + err.Error())
 			}
+			op.Data = dataBytes
 			execContext.stagedOps = append(execContext.stagedOps, op)
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
 		Export("l0_write_data")
@@ -725,12 +723,12 @@ func registerL0Functions(ctx context.Context, builder wazero.HostModuleBuilder, 
 			accountBytes, _ := memory.Read(accountPtr, accountLen)
 			authBytes, _ := memory.Read(authPtr, authLen)
 
-			// Stage L0 operation
-			op := &StagedOp{
-				Type:    "update_auth",
-				Account: string(accountBytes),
-				Data:    authBytes,
+			// Stage L0 operation using URL-based constructor
+			op, err := NewStagedOp("update_auth", string(accountBytes))
+			if err != nil {
+				panic("l0_update_auth: invalid account URL: " + err.Error())
 			}
+			op.Data = authBytes
 			execContext.stagedOps = append(execContext.stagedOps, op)
 		}), []api.ValueType{api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32, api.ValueTypeI32}, []api.ValueType{}).
 		Export("l0_update_auth")

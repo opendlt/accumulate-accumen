@@ -6,10 +6,12 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 
 	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/host"
 	"github.com/opendlt/accumulate-accumen/engine/state"
+	"github.com/opendlt/accumulate-accumen/internal/accutil"
 )
 
 // ExecMode defines the execution mode for WASM contracts
@@ -61,12 +63,12 @@ func DefaultConfig() *Config {
 
 // StagedOp represents a staged L0 operation
 type StagedOp struct {
-	Type    string // "write_data", "send_tokens", "update_auth"
-	Account string // Account URL
-	From    string // For send_tokens
-	To      string // For send_tokens
-	Amount  uint64 // For send_tokens
-	Data    []byte // For write_data and update_auth
+	Type    string   // "write_data", "send_tokens", "update_auth"
+	Account *url.URL // Account URL
+	From    *url.URL // For send_tokens
+	To      *url.URL // For send_tokens
+	Amount  uint64   // For send_tokens
+	Data    []byte   // For write_data and update_auth
 }
 
 // Event represents an emitted event
@@ -97,6 +99,109 @@ func (ec *ExecutionContext) GetStagedOps() []*StagedOp {
 // GetEvents returns the emitted events
 func (ec *ExecutionContext) GetEvents() []*Event {
 	return ec.events
+}
+
+// NewStagedOp creates a new staged operation with proper URL parsing
+func NewStagedOp(opType string, accountURL string) (*StagedOp, error) {
+	account, err := accutil.ParseURL(accountURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid account URL: %w", err)
+	}
+
+	return &StagedOp{
+		Type:    opType,
+		Account: account,
+	}, nil
+}
+
+// SetFrom sets the From URL for send_tokens operations
+func (so *StagedOp) SetFrom(fromURL string) error {
+	if fromURL == "" {
+		so.From = nil
+		return nil
+	}
+
+	from, err := accutil.ParseURL(fromURL)
+	if err != nil {
+		return fmt.Errorf("invalid from URL: %w", err)
+	}
+
+	so.From = from
+	return nil
+}
+
+// SetTo sets the To URL for send_tokens operations
+func (so *StagedOp) SetTo(toURL string) error {
+	if toURL == "" {
+		so.To = nil
+		return nil
+	}
+
+	to, err := accutil.ParseURL(toURL)
+	if err != nil {
+		return fmt.Errorf("invalid to URL: %w", err)
+	}
+
+	so.To = to
+	return nil
+}
+
+// GetAccountString returns the account URL as a string
+func (so *StagedOp) GetAccountString() string {
+	if so.Account == nil {
+		return ""
+	}
+	return accutil.Canonicalize(so.Account)
+}
+
+// GetFromString returns the from URL as a string
+func (so *StagedOp) GetFromString() string {
+	if so.From == nil {
+		return ""
+	}
+	return accutil.Canonicalize(so.From)
+}
+
+// GetToString returns the to URL as a string
+func (so *StagedOp) GetToString() string {
+	if so.To == nil {
+		return ""
+	}
+	return accutil.Canonicalize(so.To)
+}
+
+// Validate validates the staged operation
+func (so *StagedOp) Validate() error {
+	if so.Type == "" {
+		return fmt.Errorf("operation type cannot be empty")
+	}
+
+	if so.Account == nil {
+		return fmt.Errorf("account URL cannot be nil")
+	}
+
+	switch so.Type {
+	case "write_data":
+		// No additional validation needed
+	case "send_tokens":
+		if so.From == nil {
+			return fmt.Errorf("send_tokens operation requires From URL")
+		}
+		if so.To == nil {
+			return fmt.Errorf("send_tokens operation requires To URL")
+		}
+		if so.Amount == 0 {
+			return fmt.Errorf("send_tokens operation requires non-zero amount")
+		}
+	case "update_auth":
+		if len(so.Data) == 0 {
+			return fmt.Errorf("update_auth operation requires data")
+		}
+	default:
+		return fmt.Errorf("unknown operation type: %s", so.Type)
+	}
+
+	return nil
 }
 
 // ExecutionResult represents the result of WASM execution
