@@ -61,6 +61,11 @@ type Config struct {
 		ReconnectMax string `yaml:"reconnectMax"` // maximum reconnect delay (e.g., "60s")
 		Enable       bool   `yaml:"enable"`       // enable event monitoring for confirmations
 	} `yaml:"events"`
+	Credits struct {
+		MinBuffer    uint64 `yaml:"minBuffer"`    // credits to maintain
+		Target       uint64 `yaml:"target"`       // refill to this amount
+		FundingToken string `yaml:"fundingToken"` // acc://.../tokens used to pay ACME for credits
+	} `yaml:"credits"`
 	Profiles struct {
 		Name string `yaml:"name"` // "mainnet"|"testnet"|"devnet"|"local"
 		Path string `yaml:"path"` // optional explicit file path
@@ -228,6 +233,17 @@ func (c *Config) mergeProfile(profile *Config) {
 	if !c.Events.Enable && profile.Events.Enable {
 		c.Events.Enable = profile.Events.Enable
 	}
+
+	// Merge credits settings
+	if c.Credits.MinBuffer == 0 && profile.Credits.MinBuffer != 0 {
+		c.Credits.MinBuffer = profile.Credits.MinBuffer
+	}
+	if c.Credits.Target == 0 && profile.Credits.Target != 0 {
+		c.Credits.Target = profile.Credits.Target
+	}
+	if c.Credits.FundingToken == "" && profile.Credits.FundingToken != "" {
+		c.Credits.FundingToken = profile.Credits.FundingToken
+	}
 }
 
 // EffectiveNetwork returns the name of the effective network profile being used
@@ -359,6 +375,17 @@ func (c *Config) setDefaults() error {
 		c.Events.ReconnectMax = "60s"
 	}
 	// Events.Enable defaults to false (no change needed)
+
+	// Set default credits configuration
+	if c.Credits.MinBuffer == 0 {
+		c.Credits.MinBuffer = 1000 // Maintain at least 1000 credits
+	}
+	if c.Credits.Target == 0 {
+		c.Credits.Target = 5000 // Refill to 5000 credits
+	}
+	if c.Credits.FundingToken == "" {
+		c.Credits.FundingToken = "acc://acme.acme/tokens" // Default ACME token URL
+	}
 
 	return nil
 }
@@ -513,6 +540,14 @@ func (c *Config) validate() error {
 			return fmt.Errorf("events reconnect min (%s) cannot be greater than reconnect max (%s)",
 				c.Events.ReconnectMin, c.Events.ReconnectMax)
 		}
+	}
+
+	// Validate credits configuration
+	if c.Credits.Target < c.Credits.MinBuffer {
+		return fmt.Errorf("credits target (%d) must be greater than or equal to minBuffer (%d)", c.Credits.Target, c.Credits.MinBuffer)
+	}
+	if c.Credits.FundingToken == "" {
+		return fmt.Errorf("credits funding token URL cannot be empty")
 	}
 
 	return nil

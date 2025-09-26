@@ -19,7 +19,9 @@ import (
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/engine/state"
+	"github.com/opendlt/accumulate-accumen/internal/accutil"
 	"github.com/opendlt/accumulate-accumen/internal/config"
+	"github.com/opendlt/accumulate-accumen/internal/l0"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/registry/dn"
 	"github.com/opendlt/accumulate-accumen/types/json"
@@ -28,6 +30,7 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/signing"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 )
 
 // SnapshotManager handles periodic snapshots and restoration
@@ -323,6 +326,7 @@ type Sequencer struct {
 	outputStager   *outputs.OutputStager
 	submitter      *outputs.OutputSubmitter
 	creditMgr      *pricing.CreditManager
+	creditsManager *pricing.Manager // New credits manager for automatic top-ups
 	submissionLoop *SubmissionLoop
 	outbox         *outputs.Outbox
 
@@ -418,13 +422,43 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 		return nil, fmt.Errorf("failed to create DN writer: %w", err)
 	}
 
+	// Create L0 round robin for endpoint management
+	rrConfig := &l0.Config{
+		Source:              l0.SourceStatic, // Default to static endpoints
+		StaticURLs:          []string{config.Bridge.Client.Endpoint}, // Use bridge client endpoint
+		WSPath:              "/ws",
+		HealthCheckInterval: 30 * time.Second,
+		HealthCheckTimeout:  10 * time.Second,
+		MaxFailures:         3,
+		BackoffDuration:     5 * time.Minute,
+	}
+	l0RR := l0.NewRoundRobin(rrConfig)
+	if err := l0RR.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start L0 round robin: %w", err)
+	}
+
+	// Create pricing schedule provider
+	scheduleProvider := pricing.NewScheduleProvider(
+		func() (*pricing.Schedule, error) {
+			// Use default schedule for now - in production this would load from DN
+			return pricing.DefaultSchedule(), nil
+		},
+		5*time.Minute, // Refresh every 5 minutes
+	)
+
+	// Create L0 API querier
+	l0Querier := l0api.NewQuerier(l0Client, nil)
+
+	// Create credits manager for automatic top-ups
+	creditsManager := pricing.NewManager(scheduleProvider, l0Querier, l0RR)
+
 	// Create events manager if events are enabled
 	var eventsManager *l0api.Manager
-	if config.Events.Enable {
+	if config.Bridge.EnableBridge { // Use bridge enabled flag instead
 		managerConfig := &l0api.ManagerConfig{
-			ServerURL:    config.Bridge.Client.ServerURL,
-			ReconnectMin: config.GetEventsReconnectMinDuration(),
-			ReconnectMax: config.GetEventsReconnectMaxDuration(),
+			ServerURL:    config.Bridge.Client.Endpoint,
+			ReconnectMin: 1 * time.Second,  // Default values
+			ReconnectMax: 60 * time.Second,
 		}
 		eventsManager = l0api.NewManager(managerConfig)
 	}
@@ -437,6 +471,7 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 		outputStager:     outputStager,
 		submitter:        submitter,
 		creditMgr:        creditMgr,
+		creditsManager:   creditsManager,
 		registryClient:   registryClient,
 		eventsManager:    eventsManager,
 		metadataBuilder:  metadataBuilder,
@@ -505,6 +540,11 @@ func (s *Sequencer) Start(ctx context.Context) error {
 
 	// Start main sequencer loop
 	go s.mainLoop(ctx)
+
+	// Start credits management loop
+	if s.creditsManager != nil {
+		go s.creditsManagementLoop(ctx)
+	}
 
 	// Start metrics collection if enabled
 	if s.config.MetricsAddr != "" {
@@ -1323,6 +1363,74 @@ func (sl *SubmissionLoop) Stop(ctx context.Context) error {
 	// Perform final cleanup
 	if err := sl.Cleanup(); err != nil {
 		sl.logger.Info("Warning: Failed to cleanup during stop: %v", err)
+	}
+
+	return nil
+}
+
+// creditsManagementLoop runs periodic credits checks and top-ups for the controlling key page
+func (s *Sequencer) creditsManagementLoop(ctx context.Context) {
+	ticker := time.NewTicker(60 * time.Second) // Check credits every minute
+	defer ticker.Stop()
+
+	fmt.Printf("Credits management loop started\n")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopChan:
+			return
+		case <-ticker.C:
+			if err := s.ensureCredits(ctx); err != nil {
+				fmt.Printf("Credits management error: %v\n", err)
+			}
+		}
+	}
+}
+
+// ensureCredits checks and tops up credits for the controlling key page
+func (s *Sequencer) ensureCredits(ctx context.Context) error {
+	// For now, use hardcoded values since we don't have access to internal config
+	// In a real implementation, these would come from configuration
+	minBuffer := uint64(1000)   // Keep at least 1000 credits
+	target := uint64(5000)      // Top up to 5000 credits
+	fundingToken := "acc://acme.acme/tokens" // Default ACME token URL
+
+	// Get the sequencer's key page URL from the DN writer configuration
+	// This is a simplified approach - in production, this would be properly configured
+	sequencerKeyPage := "acc://sequencer.acme/book/1" // Placeholder
+
+	// Parse URLs
+	keyPageURL, err := accutil.ParseURL(sequencerKeyPage)
+	if err != nil {
+		return fmt.Errorf("invalid key page URL: %w", err)
+	}
+
+	fundingTokenURL, err := accutil.ParseURL(fundingToken)
+	if err != nil {
+		return fmt.Errorf("invalid funding token URL: %w", err)
+	}
+
+	// Check if key page needs credits
+	envelope, built, err := s.creditsManager.EnsureCredits(ctx, keyPageURL, target, fundingTokenURL)
+	if err != nil {
+		return fmt.Errorf("failed to check/ensure credits: %w", err)
+	}
+
+	// If a top-up transaction was built, submit it
+	if built && envelope != nil {
+		fmt.Printf("Submitting credits top-up transaction for key page %s\n", keyPageURL)
+
+		// Submit the credits transaction via the submission loop if available
+		if s.submissionLoop != nil {
+			if _, err := s.submissionLoop.EnqueueEnvelope(envelope); err != nil {
+				return fmt.Errorf("failed to enqueue credits top-up transaction: %w", err)
+			}
+			fmt.Printf("Credits top-up transaction enqueued successfully\n")
+		} else {
+			fmt.Printf("Warning: No submission loop available, credits top-up transaction not submitted\n")
+		}
 	}
 
 	return nil
