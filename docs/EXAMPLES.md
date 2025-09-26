@@ -577,6 +577,388 @@ INFO[2024-01-15T10:30:00Z] Mempool replay completed: replayed=5 errors=0
 3. **Batch submissions**: Group related transactions together
 4. **Connection pooling**: Reuse HTTP connections for multiple requests
 
+## Onboard a Contract as ADI Delegate
+
+This walkthrough demonstrates how to set up an Accumulate Decentralized Identity (ADI) and configure it so that a contract can legally stage L0 operations. This enables contracts to write data to the Accumulate network, send tokens, and perform other L0 operations on behalf of the ADI.
+
+### Prerequisites
+
+- Running Accumen sequencer
+- Access to Accumulate L0 network (mainnet or testnet)
+- Ed25519 key pair for signing transactions
+- ACME credits for transaction fees
+
+### Step 1: Generate Keys and Prepare Configuration
+
+First, generate an Ed25519 key pair for your ADI:
+
+```bash
+# Generate a new Ed25519 key pair (you can use any tool that generates Ed25519 keys)
+# For development, you can use the accumulate CLI or OpenSSL
+
+# Example with OpenSSL:
+openssl genpkey -algorithm Ed25519 -out adi_private_key.pem
+openssl pkey -in adi_private_key.pem -pubout -out adi_public_key.pem
+
+# Extract the hex-encoded public key
+openssl pkey -in adi_public_key.pem -pubin -text -noout
+```
+
+Save your configuration:
+
+```yaml
+# config/adi_setup.yaml
+identity:
+  url: "acc://mycompany.acme"
+  key_book_url: "acc://mycompany.acme/book"
+  key_page_url: "acc://mycompany.acme/book/1"
+  data_account_url: "acc://mydata.mycompany.acme"
+contract:
+  url: "acc://mycontract.mycompany.acme"
+keys:
+  public_key_hex: "your-ed25519-public-key-hex-here"
+  private_key_hex: "your-ed25519-private-key-hex-here"
+credits:
+  initial_amount: 1000000  # 1 million credits
+```
+
+### Step 2: Create Go Program to Setup ADI Delegation
+
+Create a setup program using the Accumen auth helpers:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/opendlt/accumulate-accumen/bridge/l0api"
+	"github.com/opendlt/accumulate-accumen/internal/crypto/devsigner"
+)
+
+func main() {
+	// Configuration
+	config := &l0api.ContractDelegationConfig{
+		IdentityURL:    "acc://mycompany.acme",
+		KeyBookURL:     "acc://mycompany.acme/book",
+		KeyPageURL:     "acc://mycompany.acme/book/1",
+		ContractURL:    "acc://mycontract.mycompany.acme",
+		DataAccountURL: "acc://mydata.mycompany.acme",
+		PublicKeyHex:   "your-ed25519-public-key-hex-here",
+		Permissions: []l0api.AuthorityPermission{
+			l0api.PermissionWriteData,
+			l0api.PermissionSendTokens,
+		},
+		InitialCredits: 1000000, // 1 million credits
+	}
+
+	// Validate configuration
+	if err := config.ValidateConfig(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+
+	// Create L0 client
+	clientConfig := &l0api.ClientConfig{
+		Endpoint: "https://testnet.accumulatenetwork.io/v3",
+		Timeout:  30 * time.Second,
+	}
+
+	client, err := l0api.NewClient(clientConfig)
+	if err != nil {
+		log.Fatalf("Failed to create L0 client: %v", err)
+	}
+
+	// Create signer with your private key
+	signer, err := devsigner.New("your-ed25519-private-key-hex-here")
+	if err != nil {
+		log.Fatalf("Failed to create signer: %v", err)
+	}
+
+	// Build all delegation setup transactions
+	envelopes, err := l0api.BuildFullDelegationSetup(config)
+	if err != nil {
+		log.Fatalf("Failed to build delegation setup: %v", err)
+	}
+
+	fmt.Printf("Created %d transactions for ADI delegation setup\n", len(envelopes))
+
+	// Execute transactions in order
+	ctx := context.Background()
+	for i, envelope := range envelopes {
+		fmt.Printf("Submitting transaction %d/%d...\n", i+1, len(envelopes))
+
+		// Sign the transaction
+		signedEnvelope, err := signer.Sign(envelope)
+		if err != nil {
+			log.Fatalf("Failed to sign transaction %d: %v", i+1, err)
+		}
+
+		// Submit to L0 network
+		result, err := client.Submit(ctx, signedEnvelope)
+		if err != nil {
+			log.Fatalf("Failed to submit transaction %d: %v", i+1, err)
+		}
+
+		fmt.Printf("Transaction %d submitted successfully: %x\n", i+1, result.TransactionHash)
+
+		// Wait between transactions to avoid nonce issues
+		time.Sleep(2 * time.Second)
+	}
+
+	fmt.Println("ADI delegation setup completed successfully!")
+	fmt.Printf("Contract %s can now stage L0 operations for identity %s\n",
+		config.ContractURL, config.IdentityURL)
+}
+```
+
+### Step 3: Execute the Setup
+
+Build and run the setup program:
+
+```bash
+# Build the program
+go mod tidy
+go build -o adi-setup ./cmd/adi-setup
+
+# Run the setup
+./adi-setup
+```
+
+Expected output:
+```
+Created 6 transactions for ADI delegation setup
+Submitting transaction 1/6...
+Transaction 1 submitted successfully: a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456
+Submitting transaction 2/6...
+Transaction 2 submitted successfully: b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234567a
+...
+ADI delegation setup completed successfully!
+Contract acc://mycontract.mycompany.acme can now stage L0 operations for identity acc://mycompany.acme
+```
+
+### Step 4: Deploy Contract with Delegation Authority
+
+Now deploy your contract that can perform L0 operations:
+
+```rust
+// src/lib.rs - Example Rust contract with L0 staging capability
+#[no_mangle]
+pub extern "C" fn write_data_to_l0() {
+    // Get the data to write
+    let data = b"Hello from Accumen contract!";
+
+    // Stage L0 write data operation
+    // The contract URL (acc://mycontract.mycompany.acme) now has authority
+    // to write data to acc://mydata.mycompany.acme
+    unsafe {
+        l0_write_data(
+            b"acc://mydata.mycompany.acme\0".as_ptr(),
+            data.as_ptr(),
+            data.len() as u32,
+        );
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn send_tokens_via_l0() {
+    // Stage L0 send tokens operation
+    // The contract can now send tokens from the ADI's token accounts
+    let recipient = b"acc://recipient.acme\0";
+    let amount = 1000000u64; // 1 ACME
+
+    unsafe {
+        l0_send_tokens(
+            b"acc://tokens.mycompany.acme\0".as_ptr(),
+            recipient.as_ptr(),
+            amount,
+        );
+    }
+}
+
+// External function declarations for L0 operations
+extern "C" {
+    fn l0_write_data(account: *const u8, data: *const u8, len: u32);
+    fn l0_send_tokens(from: *const u8, to: *const u8, amount: u64);
+}
+```
+
+Build and deploy the contract:
+
+```bash
+# Build the WASM contract
+cargo build --target wasm32-unknown-unknown --release
+
+# Deploy via Accumen CLI
+./bin/accucli deploy \
+  --rpc=http://127.0.0.1:8666 \
+  --addr=acc://mycontract.mycompany.acme \
+  --wasm=target/wasm32-unknown-unknown/release/my_contract.wasm
+```
+
+### Step 5: Test Contract L0 Operations
+
+Execute contract functions that perform L0 operations:
+
+```bash
+# Test data writing capability
+./bin/accucli submit \
+  --rpc=http://127.0.0.1:8666 \
+  --contract=acc://mycontract.mycompany.acme \
+  --entry=write_data_to_l0
+
+# Test token sending capability
+./bin/accucli submit \
+  --rpc=http://127.0.0.1:8666 \
+  --contract=acc://mycontract.mycompany.acme \
+  --entry=send_tokens_via_l0
+```
+
+### Step 6: Verify L0 Operations
+
+Check that the L0 operations were successfully staged and submitted:
+
+```bash
+# Check the sequencer logs for L0 operation staging
+tail -f logs/sequencer.log | grep "L0 operation staged"
+
+# Expected output:
+# INFO[2024-01-15T10:35:15Z] L0 operation staged: WriteData to acc://mydata.mycompany.acme
+# INFO[2024-01-15T10:35:16Z] L0 operation staged: SendTokens from acc://tokens.mycompany.acme to acc://recipient.acme
+
+# Verify data was written to the Accumulate network
+curl -X POST https://testnet.accumulatenetwork.io/v3 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "method": "query",
+    "params": {
+      "url": "acc://mydata.mycompany.acme"
+    }
+  }'
+
+# Verify token transfer
+curl -X POST https://testnet.accumulatenetwork.io/v3 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "method": "query",
+    "params": {
+      "url": "acc://tokens.mycompany.acme"
+    }
+  }'
+```
+
+### Individual Helper Functions
+
+You can also use the individual helper functions for specific operations:
+
+#### Create Identity Only
+
+```go
+envelope, err := l0api.BuildCreateIdentity(
+    "acc://mycompany.acme",
+    "acc://mycompany.acme/book",
+    "your-public-key-hex",
+)
+```
+
+#### Create Key Book Only
+
+```go
+envelope, err := l0api.BuildCreateKeyBook(
+    "acc://mycompany.acme/book",
+    "your-public-key-hex",
+)
+```
+
+#### Update Account Authority
+
+```go
+envelope, err := l0api.BuildUpdateAccountAuthDelegate(
+    "acc://mydata.mycompany.acme",      // Account to update
+    "acc://mycontract.mycompany.acme",  // Contract to delegate to
+    "acc://mycompany.acme/book",        // Key book for authority
+    l0api.PermissionWriteData,          // Permissions to grant
+    l0api.PermissionSendTokens,
+)
+```
+
+#### Remove Contract Delegation
+
+```go
+envelope, err := l0api.BuildRemoveContractDelegate(
+    "acc://mydata.mycompany.acme",      // Account to update
+    "acc://mycontract.mycompany.acme",  // Contract to remove
+)
+```
+
+### Permission Levels
+
+The system supports different permission levels for contracts:
+
+- **PermissionSign**: Basic signing capability
+- **PermissionWriteData**: Can write data to accounts
+- **PermissionSendTokens**: Can send tokens and write data
+- **PermissionUpdateAuth**: Can update account authority (dangerous)
+- **PermissionFull**: All permissions (very dangerous)
+
+### Security Considerations
+
+1. **Principle of Least Privilege**: Grant contracts only the minimum permissions needed
+2. **Key Security**: Store private keys securely, never in code or public repositories
+3. **Contract Auditing**: Audit contracts thoroughly before granting delegation authority
+4. **Permission Review**: Regularly review and rotate delegation permissions
+5. **Monitoring**: Monitor L0 operations staged by contracts for suspicious activity
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **"Authority not found" errors**:
+   - Ensure the ADI setup completed successfully
+   - Verify the contract URL has been granted delegation authority
+   - Check that the key page has sufficient credits
+
+2. **"Insufficient credits" errors**:
+   - Add more credits to the key page: `BuildAddCreditsToKeyPage()`
+   - Verify credit balance before executing operations
+
+3. **"Invalid signature" errors**:
+   - Ensure the private key matches the public key used in setup
+   - Verify the signer is correctly configured
+
+4. **Contract execution failures**:
+   - Check sequencer logs for detailed error messages
+   - Verify the contract WASM is valid and properly deployed
+   - Ensure L0 operations are correctly formatted
+
+#### Monitoring Commands
+
+```bash
+# Monitor sequencer L0 operations
+tail -f logs/sequencer.log | grep "L0"
+
+# Check ADI status
+curl -X POST https://testnet.accumulatenetwork.io/v3 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "method": "query",
+    "params": {"url": "acc://mycompany.acme"}
+  }'
+
+# Check contract delegation status
+curl -X POST https://testnet.accumulatenetwork.io/v3 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "method": "query-directory",
+    "params": {"url": "acc://mycompany.acme"}
+  }'
+```
+
+This completes the setup process. Your contract can now legally stage L0 operations through the delegated ADI authority, enabling powerful cross-chain capabilities while maintaining security through Accumulate's authority system.
+
 ## Next Steps
 
 - Explore more complex contract patterns
