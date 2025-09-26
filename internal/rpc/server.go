@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 	"github.com/opendlt/accumulate-accumen/follower/indexer"
@@ -136,6 +137,24 @@ type DeployContractParams struct {
 // DeployContractResult represents the result of accumen.deployContract()
 type DeployContractResult struct {
 	WasmHash string `json:"wasm_hash"`
+}
+
+// SimulateParams represents parameters for accumen.simulate()
+type SimulateParams struct {
+	Contract string                 `json:"contract"`
+	Entry    string                 `json:"entry"`
+	Args     map[string]interface{} `json:"args,omitempty"`
+}
+
+// SimulateResult represents the result of accumen.simulate()
+type SimulateResult struct {
+	GasUsed           uint64  `json:"gasUsed"`
+	Events            []Event `json:"events"`
+	L0Credits         uint64  `json:"l0Credits"`
+	ACME              string  `json:"acme"`
+	EstimatedDNBytes  uint64  `json:"estimatedDNBytes"`
+	Success           bool    `json:"success"`
+	Error             string  `json:"error,omitempty"`
 }
 
 // ServerStats contains RPC server statistics
@@ -283,6 +302,12 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		result, err = s.handleGetTxReceipt(req.Params)
 	case "accumen.getBlockHeader":
 		result, err = s.handleGetBlockHeader(req.Params)
+	case "accumen.simulate":
+		if s.readOnly {
+			err = &RPCError{Code: -32601, Message: "Method not available in read-only mode"}
+		} else {
+			result, err = s.handleSimulate(req.Params)
+		}
 	default:
 		err = &RPCError{Code: -32601, Message: "Method not found"}
 	}
@@ -1082,4 +1107,67 @@ func (s *Server) GetStats() *ServerStats {
 	statsCopy := *s.stats
 	statsCopy.Uptime = time.Since(s.stats.StartTime)
 	return &statsCopy
+}
+
+// handleSimulate handles accumen.simulate() method
+func (s *Server) handleSimulate(params interface{}) (interface{}, *RPCError) {
+	// Parse parameters
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+	}
+
+	var simulateParams SimulateParams
+	if err := json.Unmarshal(paramsBytes, &simulateParams); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
+	}
+
+	// Validate required fields
+	if simulateParams.Contract == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: contract"}
+	}
+	if simulateParams.Entry == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: entry"}
+	}
+
+	// Get execution engine from sequencer
+	if s.sequencer == nil {
+		return nil, &RPCError{Code: -32603, Message: "Sequencer not available"}
+	}
+
+	engine := s.sequencer.GetExecutionEngine()
+	if engine == nil {
+		return nil, &RPCError{Code: -32603, Message: "Execution engine not available"}
+	}
+
+	// Perform simulation
+	simResult, err := engine.Simulate(simulateParams.Contract, simulateParams.Entry, simulateParams.Args)
+	if err != nil {
+		return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Simulation failed: %v", err)}
+	}
+
+	// Convert events to RPC format
+	var rpcEvents []Event
+	for _, event := range simResult.Events {
+		rpcEvents = append(rpcEvents, Event{
+			Type: event.Type,
+			Data: hex.EncodeToString(event.Data),
+		})
+	}
+
+	// Calculate ACME cost from gas used
+	credits, acmeDecimal := pricing.QuoteForGas(simResult.GasUsed)
+
+	// Build response
+	result := &SimulateResult{
+		GasUsed:          simResult.GasUsed,
+		Events:           rpcEvents,
+		L0Credits:        simResult.L0Credits,
+		ACME:             acmeDecimal,
+		EstimatedDNBytes: simResult.L0Bytes,
+		Success:          simResult.Success,
+		Error:            simResult.Error,
+	}
+
+	return result, nil
 }
