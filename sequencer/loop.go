@@ -92,9 +92,11 @@ func (sm *SnapshotManager) TakeSnapshot(height uint64, appHash string) error {
 	sm.logger.Info("Snapshot completed: height=%d, keys=%d, duration=%v, path=%s",
 		height, meta.NumKeys, duration, snapshotPath)
 
-	// Clean up old snapshots
-	if err := sm.cleanupOldSnapshots(); err != nil {
-		sm.logger.Info("Warning: failed to cleanup old snapshots: %v", err)
+	// Clean up old snapshots using PruneOld
+	if sm.config.Snapshots.Retain > 0 {
+		if err := state.PruneOld(sm.snapshotDir, sm.config.Snapshots.Retain); err != nil {
+			sm.logger.Info("Warning: failed to prune old snapshots: %v", err)
+		}
 	}
 
 	return nil
@@ -241,47 +243,6 @@ func (sm *SnapshotManager) findLatestSnapshot() (string, error) {
 	return filepath.Join(sm.snapshotDir, snapshots[0]), nil
 }
 
-// cleanupOldSnapshots removes old snapshots beyond the retention limit
-func (sm *SnapshotManager) cleanupOldSnapshots() error {
-	if sm.config.Snapshots.Retain <= 0 {
-		return nil // No cleanup if retain is 0 or negative
-	}
-
-	entries, err := os.ReadDir(sm.snapshotDir)
-	if err != nil {
-		return fmt.Errorf("failed to read snapshot directory: %w", err)
-	}
-
-	var snapshots []string
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".snap") {
-			snapshots = append(snapshots, entry.Name())
-		}
-	}
-
-	if len(snapshots) <= sm.config.Snapshots.Retain {
-		return nil // No cleanup needed
-	}
-
-	// Sort by height (descending)
-	sort.Slice(snapshots, func(i, j int) bool {
-		heightI := extractHeightFromFilename(snapshots[i])
-		heightJ := extractHeightFromFilename(snapshots[j])
-		return heightI > heightJ
-	})
-
-	// Remove old snapshots beyond retention limit
-	for i := sm.config.Snapshots.Retain; i < len(snapshots); i++ {
-		snapshotPath := filepath.Join(sm.snapshotDir, snapshots[i])
-		if err := os.Remove(snapshotPath); err != nil {
-			sm.logger.Info("Warning: failed to remove old snapshot %s: %v", snapshotPath, err)
-		} else {
-			sm.logger.Debug("Removed old snapshot: %s", snapshotPath)
-		}
-	}
-
-	return nil
-}
 
 // extractHeightFromFilename extracts height from snapshot filename
 func extractHeightFromFilename(filename string) uint64 {
