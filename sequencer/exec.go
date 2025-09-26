@@ -78,7 +78,7 @@ func NewScopeCache(ttl time.Duration) *ScopeCache {
 }
 
 // Get retrieves a cached scope or fetches a new one
-func (sc *ScopeCache) Get(ctx context.Context, dnEndpoint, contractURL string) (*outputs.AuthorityScope, error) {
+func (sc *ScopeCache) Get(ctx context.Context, client interface{}, contractURL string) (*outputs.AuthorityScope, error) {
 	sc.mu.RLock()
 	if entry, exists := sc.cache[contractURL]; exists {
 		if time.Since(entry.fetchedAt) < sc.ttl {
@@ -89,7 +89,7 @@ func (sc *ScopeCache) Get(ctx context.Context, dnEndpoint, contractURL string) (
 	sc.mu.RUnlock()
 
 	// Cache miss or expired, fetch new scope
-	scope, err := outputs.FetchFromDN(ctx, dnEndpoint, contractURL)
+	scope, err := outputs.FetchFromDN(ctx, client, contractURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch authority scope: %w", err)
 	}
@@ -118,9 +118,12 @@ type ExecutionEngine struct {
 	// Authority scope management
 	scopeCache     *ScopeCache
 	limitTracker   *outputs.OperationLimitTracker
-	dnEndpoint     string
+	dnClient       interface{} // DN client for scope fetching
 	l0Querier      *l0api.Querier
 	bindingRegistry *authority.Registry
+
+	// Scope refresh configuration
+	scopeRefreshInterval uint64 // Check scope every N blocks
 
 	// Namespace management
 	namespaceManager *dn.NamespaceManager
@@ -155,7 +158,7 @@ type workItem struct {
 }
 
 // NewExecutionEngine creates a new execution engine
-func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider, dnEndpoint string, l0Querier *l0api.Querier, namespaceConfig *config.Namespace) (*ExecutionEngine, error) {
+func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider, dnClient interface{}, l0Querier *l0api.Querier, namespaceConfig *config.Namespace) (*ExecutionEngine, error) {
 	// Create WASM runtime
 	wasmRuntime, err := runtime.NewRuntime(&config.Runtime)
 	if err != nil {
@@ -197,22 +200,23 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 	bindingRegistry := authority.NewRegistry(kvStore)
 
 	engine := &ExecutionEngine{
-		config:           config,
-		runtime:          wasmRuntime,
-		kvStore:          kvStore,
-		contractStore:    contractStore,
-		gasMeter:         gasMeter,
-		scheduleProvider: scheduleProvider,
-		scopeCache:       NewScopeCache(30 * time.Second), // Cache scopes for 30 seconds
-		limitTracker:     outputs.NewOperationLimitTracker(),
-		dnEndpoint:       dnEndpoint,
-		l0Querier:        l0Querier,
-		bindingRegistry:  bindingRegistry,
-		namespaceManager: namespaceManager,
-		namespaceConfig:  namespaceConfig,
-		currentHeight:    0,
-		stateRoot:        make([]byte, 32), // Genesis state root
-		workQueue:        make(chan *workItem, config.WorkerCount*2),
+		config:               config,
+		runtime:              wasmRuntime,
+		kvStore:              kvStore,
+		contractStore:        contractStore,
+		gasMeter:             gasMeter,
+		scheduleProvider:     scheduleProvider,
+		scopeCache:           NewScopeCache(30 * time.Second), // Cache scopes for 30 seconds
+		limitTracker:         outputs.NewOperationLimitTracker(),
+		dnClient:             dnClient,
+		l0Querier:            l0Querier,
+		bindingRegistry:      bindingRegistry,
+		scopeRefreshInterval: 10, // Check scope every 10 blocks
+		namespaceManager:     namespaceManager,
+		namespaceConfig:      namespaceConfig,
+		currentHeight:        0,
+		stateRoot:            make([]byte, 32), // Genesis state root
+		workQueue:            make(chan *workItem, config.WorkerCount*2),
 	}
 
 	// Initialize worker pool if parallel execution is enabled
@@ -391,6 +395,30 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		StateChanges:  make([]state.StateChange, 0),
 	}
 
+	// Check if contract is paused - fetch scope every N blocks
+	if e.currentHeight%e.scopeRefreshInterval == 0 || tx.From == "" { // Skip check for system transactions (no From field)
+		// Only check for user transactions (those with a From field)
+		if tx.From != "" {
+			scope, err := e.scopeCache.Get(ctx, e.dnClient, tx.To)
+			if err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("failed to fetch contract scope: %v", err)
+				result.ErrorCode = "SCOPE_FETCH_FAILED"
+				result.ExecutionTime = time.Since(startTime)
+				return result
+			}
+
+			// Check if contract is paused
+			if scope.Paused {
+				result.Success = false
+				result.Error = fmt.Sprintf("contract %s is currently paused", tx.To)
+				result.ErrorCode = "CONTRACT_PAUSED"
+				result.ExecutionTime = time.Since(startTime)
+				return result
+			}
+		}
+	}
+
 	// Create gas meter for this transaction with current schedule
 	var gasConfig gas.Config
 	if e.scheduleProvider != nil {
@@ -463,7 +491,7 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		}
 
 		// Fetch authority scope for this contract
-		scope, err := e.scopeCache.Get(ctx, e.dnEndpoint, tx.To)
+		scope, err := e.scopeCache.Get(ctx, e.dnClient, tx.To)
 		if err != nil {
 			result.Success = false
 			result.Error = fmt.Sprintf("failed to fetch authority scope: %v", err)

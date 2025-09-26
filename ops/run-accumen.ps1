@@ -5,7 +5,9 @@ param(
     [string]$Config = "config/local.yaml",
     [string]$Role = "sequencer",
     [string]$RPC = ":8666",
-    [string]$LogLevel = "info"
+    [string]$LogLevel = "info",
+    [ValidateSet("devnet", "testnet", "mainnet", "")]
+    [string]$Network = ""
 )
 
 # Set error handling
@@ -30,6 +32,9 @@ Write-ColoredOutput "   Role: $Role" $Yellow
 Write-ColoredOutput "   Config: $Config" $Yellow
 Write-ColoredOutput "   RPC: $RPC" $Yellow
 Write-ColoredOutput "   Log Level: $LogLevel" $Yellow
+if ($Network) {
+    Write-ColoredOutput "   Network: $Network" $Yellow
+}
 Write-ColoredOutput ""
 
 # Check if config file exists
@@ -94,7 +99,11 @@ try {
 
 Write-ColoredOutput ""
 Write-ColoredOutput "🔧 Build and run command:" $Blue
-Write-ColoredOutput "   go run ./cmd/accumen --role=$Role --config=$Config --rpc=$RPC --log-level=$LogLevel" $Yellow
+$cmdPreview = "   go run ./cmd/accumen --role=$Role --config=$Config --rpc=$RPC --log-level=$LogLevel"
+if ($Network) {
+    $cmdPreview += " --network=$Network"
+}
+Write-ColoredOutput $cmdPreview $Yellow
 Write-ColoredOutput ""
 
 # Set up signal handling
@@ -104,13 +113,25 @@ Register-EngineEvent PowerShell.Exiting -Action {
     Write-ColoredOutput "`n🛑 Shutdown signal received..." $Yellow
 }
 
+# Set network environment variable if specified
+if ($Network) {
+    Write-ColoredOutput "🌐 Setting network environment: ACCUMEN_NETWORK=$Network" $Yellow
+    $env:ACCUMEN_NETWORK = $Network
+}
+
 # Run the application
 try {
     Write-ColoredOutput "▶️  Starting Accumen..." $Green
     Write-ColoredOutput ""
 
+    # Build command arguments
+    $args = @("./cmd/accumen", "--role=$Role", "--config=$Config", "--rpc=$RPC", "--log-level=$LogLevel")
+    if ($Network) {
+        $args += "--network=$Network"
+    }
+
     # Execute the go run command
-    & go run ./cmd/accumen --role=$Role --config=$Config --rpc=$RPC --log-level=$LogLevel
+    & go run $args
 
     if ($LASTEXITCODE -ne 0) {
         Write-ColoredOutput "❌ Accumen exited with error code: $LASTEXITCODE" $Red

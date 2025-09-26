@@ -1649,6 +1649,219 @@ free -h
 df -h
 ```
 
+## Switching Networks
+
+Accumen supports multiple network profiles to easily switch between different Accumulate networks (devnet, testnet, mainnet) without manually configuring endpoints.
+
+### Network Profiles
+
+The following network profiles are built into Accumen:
+
+#### Devnet
+- **Endpoints**: `http://127.0.0.1:26660` (local devnet)
+- **Use case**: Local development and testing
+- **WebSocket**: `/ws`
+
+#### Testnet
+- **Endpoints**: `https://testnet.accumulate.net/v3`
+- **Use case**: Integration testing and staging
+- **WebSocket**: `/ws`
+
+#### Mainnet
+- **Endpoints**: `https://mainnet.accumulate.net/v3`
+- **Use case**: Production deployments
+- **WebSocket**: `/ws`
+
+### Switching Methods
+
+There are multiple ways to specify which network to use, in order of precedence:
+
+1. **Command Line Flag** (highest priority)
+2. **Environment Variable**
+3. **Configuration File**
+4. **Default** (local development)
+
+#### Method 1: Command Line Flag
+
+```bash
+# Use testnet
+go run ./cmd/accumen --config=config/local.yaml --network=testnet --role=sequencer
+
+# Use mainnet
+go run ./cmd/accumen --config=config/local.yaml --network=mainnet --role=sequencer
+
+# Use devnet (local)
+go run ./cmd/accumen --config=config/local.yaml --network=devnet --role=sequencer
+```
+
+#### Method 2: Environment Variable
+
+```bash
+# Set environment variable
+export ACCUMEN_NETWORK=testnet
+
+# Run without --network flag
+go run ./cmd/accumen --config=config/local.yaml --role=sequencer
+
+# Or on Windows
+set ACCUMEN_NETWORK=mainnet
+go run ./cmd/accumen --config=config/local.yaml --role=sequencer
+```
+
+#### Method 3: Configuration File
+
+Add the network configuration to your YAML config file:
+
+```yaml
+# config/testnet.yaml
+network:
+  name: testnet
+
+# Other configuration...
+blockTime: "5s"
+anchorEvery: "30s"
+```
+
+#### Method 4: PowerShell Script
+
+The `run-accumen.ps1` script supports the `-Network` parameter:
+
+```powershell
+# Use testnet
+.\ops\run-accumen.ps1 -Network testnet
+
+# Use mainnet
+.\ops\run-accumen.ps1 -Network mainnet -Config config/production.yaml
+
+# Use devnet (local development)
+.\ops\run-accumen.ps1 -Network devnet
+```
+
+### Network Profile Behavior
+
+When a network profile is specified:
+
+1. **Automatic Configuration**: L0 endpoints and WebSocket paths are automatically configured
+2. **Override Protection**: Manual L0 configuration in the config file takes precedence
+3. **Logging**: The effective network and endpoints are logged on startup
+4. **Validation**: Invalid network names are rejected with helpful error messages
+
+### Example Startup Output
+
+```
+INFO[2024-01-15T10:30:00Z] Using network profile: testnet
+INFO[2024-01-15T10:30:00Z] Applied network profile 'testnet': endpoints=[https://testnet.accumulate.net/v3], wsPath=/ws
+INFO[2024-01-15T10:30:00Z] L0 endpoint manager started with source: static
+INFO[2024-01-15T10:30:00Z] Using initial L0 endpoint: https://testnet.accumulate.net/v3
+```
+
+### Custom Network Configuration
+
+For custom networks or advanced configurations, you can still manually configure L0 endpoints:
+
+```yaml
+# config/custom.yaml
+l0:
+  source: static
+  static:
+    - https://custom-node1.example.com/v3
+    - https://custom-node2.example.com/v3
+  wsPath: "/ws"
+
+# Network profile will be ignored when l0.source is explicitly set
+network:
+  name: testnet  # This will be ignored
+```
+
+### Development Workflow
+
+The network profiles enable smooth development workflows:
+
+```bash
+# 1. Local development (devnet)
+.\ops\run-accumen.ps1 -Network devnet
+
+# 2. Integration testing (testnet)
+.\ops\run-accumen.ps1 -Network testnet -Config config/staging.yaml
+
+# 3. Production deployment (mainnet)
+.\ops\run-accumen.ps1 -Network mainnet -Config config/production.yaml
+```
+
+### Environment-Specific Examples
+
+#### Development Environment
+```yaml
+# config/dev.yaml
+network:
+  name: devnet
+
+blockTime: "1s"     # Fast blocks for development
+anchorEvery: "5s"   # Frequent anchoring for testing
+
+storage:
+  backend: memory   # In-memory for development
+```
+
+#### Staging Environment
+```yaml
+# config/staging.yaml
+network:
+  name: testnet
+
+blockTime: "5s"     # Moderate blocks for testing
+anchorEvery: "30s"  # Regular anchoring
+
+storage:
+  backend: badger   # Persistent storage
+  path: data/staging
+```
+
+#### Production Environment
+```yaml
+# config/production.yaml
+network:
+  name: mainnet
+
+blockTime: "15s"    # Production block timing
+anchorEvery: "60s"  # Conservative anchoring
+
+storage:
+  backend: badger
+  path: /var/lib/accumen
+
+# Override with specific endpoints for reliability
+l0:
+  source: static
+  static:
+    - https://mainnet-api1.accumulate.net/v3
+    - https://mainnet-api2.accumulate.net/v3
+    - https://mainnet-api3.accumulate.net/v3
+```
+
+### Troubleshooting Network Issues
+
+#### Unknown Network Profile
+```
+WARN[2024-01-15T10:30:00Z] Unknown network profile 'typo-testnet', using default configuration
+```
+**Solution**: Check spelling of network name (devnet, testnet, mainnet)
+
+#### Network Override
+```
+INFO[2024-01-15T10:30:00Z] Using network profile: local
+INFO[2024-01-15T10:30:00Z] L0 configuration already specified, network profile ignored
+```
+**Solution**: Remove explicit `l0.source` config if you want to use network profiles
+
+#### Endpoint Connectivity
+```
+ERROR[2024-01-15T10:30:00Z] Failed to connect to L0 endpoint: https://testnet.accumulate.net/v3
+```
+**Solution**: Check network connectivity and endpoint availability
+
+The network profile system makes it easy to switch between different Accumulate networks while maintaining consistent configuration for other aspects of your Accumen deployment.
+
 ### Configuration Templates
 See `config/` directory for environment-specific templates.
 

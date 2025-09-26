@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,13 +15,18 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+
+	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 )
 
 var (
 	rpcEndpoint = "http://127.0.0.1:8666"
-	client      = &http.Client{Timeout: 30 * time.Second}
+	httpClient  = &http.Client{Timeout: 30 * time.Second}
+	dnEndpoint  = "https://testnet.accumulate.net/v3" // Default DN endpoint
 )
 
 func main() {
@@ -31,6 +37,7 @@ func main() {
 	}
 
 	rootCmd.PersistentFlags().StringVar(&rpcEndpoint, "rpc", "http://127.0.0.1:8666", "RPC endpoint URL")
+	rootCmd.PersistentFlags().StringVar(&dnEndpoint, "dn", "https://testnet.accumulate.net/v3", "DN endpoint URL for scope operations")
 
 	rootCmd.AddCommand(
 		statusCommand(),
@@ -38,6 +45,7 @@ func main() {
 		submitCommand(),
 		queryCommand(),
 		keysCommand(),
+		scopeCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -434,7 +442,7 @@ func makeRPCCall(request rpc.RPCRequest, response interface{}) error {
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	// Make request
-	resp, err := client.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("HTTP request failed: %v", err)
 	}
@@ -470,4 +478,168 @@ func formatTimePtr(t *time.Time) interface{} {
 		return nil
 	}
 	return t.Format(time.RFC3339)
+}
+
+// scopeCommand creates the scope command with subcommands
+func scopeCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "scope",
+		Short: "Manage contract authority scopes",
+		Long:  "Commands for pausing, unpausing, and viewing contract authority scopes on DN",
+	}
+
+	cmd.AddCommand(
+		scopePauseCommand(),
+		scopeUnpauseCommand(),
+		scopeShowCommand(),
+	)
+
+	return cmd
+}
+
+// scopePauseCommand creates the scope pause subcommand
+func scopePauseCommand() *cobra.Command {
+	var contractFlag string
+
+	cmd := &cobra.Command{
+		Use:   "pause",
+		Short: "Pause a contract",
+		Long:  "Pause a contract by updating its authority scope on DN",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if contractFlag == "" {
+				return fmt.Errorf("--contract is required")
+			}
+
+			return setScopePaused(contractFlag, true)
+		},
+	}
+
+	cmd.Flags().StringVar(&contractFlag, "contract", "", "Contract URL (e.g., acc://example.acme/contract)")
+	cmd.MarkFlagRequired("contract")
+
+	return cmd
+}
+
+// scopeUnpauseCommand creates the scope unpause subcommand
+func scopeUnpauseCommand() *cobra.Command {
+	var contractFlag string
+
+	cmd := &cobra.Command{
+		Use:   "unpause",
+		Short: "Unpause a contract",
+		Long:  "Unpause a contract by updating its authority scope on DN",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if contractFlag == "" {
+				return fmt.Errorf("--contract is required")
+			}
+
+			return setScopePaused(contractFlag, false)
+		},
+	}
+
+	cmd.Flags().StringVar(&contractFlag, "contract", "", "Contract URL (e.g., acc://example.acme/contract)")
+	cmd.MarkFlagRequired("contract")
+
+	return cmd
+}
+
+// scopeShowCommand creates the scope show subcommand
+func scopeShowCommand() *cobra.Command {
+	var contractFlag string
+
+	cmd := &cobra.Command{
+		Use:   "show",
+		Short: "Show contract authority scope",
+		Long:  "Display the current authority scope for a contract from DN",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if contractFlag == "" {
+				return fmt.Errorf("--contract is required")
+			}
+
+			return showScope(contractFlag)
+		},
+	}
+
+	cmd.Flags().StringVar(&contractFlag, "contract", "", "Contract URL (e.g., acc://example.acme/contract)")
+	cmd.MarkFlagRequired("contract")
+
+	return cmd
+}
+
+// setScopePaused updates the paused state of a contract's authority scope
+func setScopePaused(contractURL string, paused bool) error {
+	// Parse contract URL
+	contractURLParsed, err := url.Parse(contractURL)
+	if err != nil {
+		return fmt.Errorf("invalid contract URL: %v", err)
+	}
+
+	// Parse DN URL
+	dnURLParsed, err := url.Parse(dnEndpoint)
+	if err != nil {
+		return fmt.Errorf("invalid DN endpoint: %v", err)
+	}
+
+	// Create DN client
+	client, err := v3.New(dnEndpoint)
+	if err != nil {
+		return fmt.Errorf("failed to create DN client: %v", err)
+	}
+
+	// Update the scope
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := outputs.SetPaused(ctx, client, dnURLParsed, contractURLParsed, paused); err != nil {
+		return fmt.Errorf("failed to update contract pause state: %v", err)
+	}
+
+	action := "paused"
+	if !paused {
+		action = "unpaused"
+	}
+
+	prettyPrint(map[string]interface{}{
+		"success":  true,
+		"contract": contractURL,
+		"action":   action,
+		"message":  fmt.Sprintf("Contract %s successfully", action),
+	})
+
+	return nil
+}
+
+// showScope displays the current authority scope for a contract
+func showScope(contractURL string) error {
+	// Create DN client
+	client, err := v3.New(dnEndpoint)
+	if err != nil {
+		return fmt.Errorf("failed to create DN client: %v", err)
+	}
+
+	// Fetch the scope
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	scope, err := outputs.FetchFromDN(ctx, client, contractURL)
+	if err != nil {
+		return fmt.Errorf("failed to fetch authority scope: %v", err)
+	}
+
+	// Display the scope
+	prettyPrint(map[string]interface{}{
+		"contract":   scope.Contract,
+		"version":    scope.Version,
+		"paused":     scope.Paused,
+		"created_at": scope.CreatedAt.Format(time.RFC3339),
+		"updated_at": scope.UpdatedAt.Format(time.RFC3339),
+		"expires_at": formatTimePtr(scope.ExpiresAt),
+		"allowed_operations": map[string]interface{}{
+			"write_data":  scope.Allowed.WriteData,
+			"send_tokens": scope.Allowed.SendTokens,
+			"update_auth": scope.Allowed.UpdateAuth,
+		},
+	})
+
+	return nil
 }

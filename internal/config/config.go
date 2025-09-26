@@ -66,6 +66,9 @@ type Config struct {
 		Target       uint64 `yaml:"target"`       // refill to this amount
 		FundingToken string `yaml:"fundingToken"` // acc://.../tokens used to pay ACME for credits
 	} `yaml:"credits"`
+	Network struct {
+		Name string `yaml:"name"` // devnet|testnet|mainnet
+	} `yaml:"network"`
 	Profiles struct {
 		Name string `yaml:"name"` // "mainnet"|"testnet"|"devnet"|"local"
 		Path string `yaml:"path"` // optional explicit file path
@@ -130,6 +133,10 @@ func determineNetwork(networkOverride string, config *Config) string {
 
 	if envNetwork := os.Getenv("ACCUMEN_NETWORK"); envNetwork != "" {
 		return envNetwork
+	}
+
+	if config.Network.Name != "" {
+		return config.Network.Name
 	}
 
 	if config.Profiles.Name != "" {

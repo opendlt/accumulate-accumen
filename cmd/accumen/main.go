@@ -21,6 +21,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/l0"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/internal/metrics"
+	"github.com/opendlt/accumulate-accumen/internal/netprofiles"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 	"github.com/opendlt/accumulate-accumen/types/l1"
@@ -73,6 +74,19 @@ func main() {
 
 	// Start metrics server
 	go startMetricsServer(*metricsAddr)
+
+	// Apply network profile if L0 source is empty and network name is set
+	if cfg.L0.Source == "" && cfg.Network.Name != "" {
+		if profile, exists := netprofiles.GetProfile(cfg.Network.Name); exists {
+			cfg.L0.Source = "static"
+			cfg.L0.Static = profile.JSONRPC
+			cfg.L0.WSPath = profile.WSPath
+			logz.Info("Applied network profile '%s': endpoints=%v, wsPath=%s",
+				cfg.Network.Name, profile.JSONRPC, profile.WSPath)
+		} else {
+			logz.Warn("Unknown network profile '%s', using default configuration", cfg.Network.Name)
+		}
+	}
 
 	// Initialize L0 endpoint manager
 	l0Config := &l0.Config{

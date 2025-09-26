@@ -9,6 +9,9 @@ import (
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+
+	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 )
 
 // Scope represents a transaction execution scope for output management
@@ -605,4 +608,67 @@ func matchesPattern(value, pattern string) bool {
 	}
 
 	return false
+}
+
+// SetPaused updates the paused state of a contract's authority scope on DN
+func SetPaused(ctx context.Context, client *v3.Client, dnURL, contractURL *url.URL, paused bool) error {
+	if client == nil {
+		return fmt.Errorf("DN client is nil")
+	}
+
+	if dnURL == nil {
+		return fmt.Errorf("DN URL cannot be nil")
+	}
+
+	if contractURL == nil {
+		return fmt.Errorf("contract URL cannot be nil")
+	}
+
+	// Construct DN registry path for authority scope
+	contractHash := hashContractURL(contractURL.String())
+	scopePath := fmt.Sprintf("registry/authority-scopes/%s", contractHash)
+	scopeURL, err := dnURL.Parse(scopePath)
+	if err != nil {
+		return fmt.Errorf("failed to construct scope URL: %w", err)
+	}
+
+	// Fetch current scope to get version for atomic update
+	currentScope, err := FetchFromDN(ctx, client, contractURL.String())
+	if err != nil {
+		return fmt.Errorf("failed to fetch current authority scope: %w", err)
+	}
+
+	// Update the scope with new paused state and version bump
+	updatedScope := *currentScope
+	updatedScope.Paused = paused
+	updatedScope.Version++
+	updatedScope.UpdatedAt = time.Now().UTC()
+
+	// Marshal the updated scope
+	scopeData, err := json.Marshal(updatedScope)
+	if err != nil {
+		return fmt.Errorf("failed to marshal authority scope: %w", err)
+	}
+
+	// Create WriteData transaction to update the scope
+	memo := fmt.Sprintf("Update contract pause status: %s -> %t", contractURL.String(), paused)
+	envelope := l0api.BuildWriteData(scopeURL, scopeData, memo, map[string]interface{}{
+		"action":     "set_paused",
+		"contract":   contractURL.String(),
+		"paused":     paused,
+		"version":    updatedScope.Version,
+		"timestamp":  updatedScope.UpdatedAt.Unix(),
+	})
+
+	// Submit the transaction
+	result, err := client.Submit(ctx, envelope.Done())
+	if err != nil {
+		return fmt.Errorf("failed to submit authority scope update: %w", err)
+	}
+
+	if result.Code != 0 {
+		return fmt.Errorf("authority scope update failed with code %d: %s", result.Code, result.Message)
+	}
+
+	return nil
 }
