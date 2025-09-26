@@ -49,6 +49,7 @@ func main() {
 		keysCommand(),
 		keystoreCommand(),
 		txCommand(),
+		simulateCommand(),
 		scopeCommand(),
 	)
 
@@ -889,6 +890,121 @@ func txSubmitCommand() *cobra.Command {
 	cmd.MarkFlagRequired("l0")
 
 	return cmd
+}
+
+// simulateCommand creates the simulate subcommand
+func simulateCommand() *cobra.Command {
+	var contract string
+	var entry string
+	var args []string
+
+	cmd := &cobra.Command{
+		Use:   "simulate",
+		Short: "Simulate contract execution without state changes",
+		Long:  "Preview gas costs, L0 credits, and ACME requirements for a contract function call",
+		RunE: func(cmd *cobra.Command, cmdArgs []string) error {
+			if contract == "" {
+				return fmt.Errorf("--contract is required")
+			}
+			if entry == "" {
+				return fmt.Errorf("--entry is required")
+			}
+
+			// Parse key:value arguments
+			txArgs := make(map[string]interface{})
+			for _, arg := range args {
+				parts := strings.SplitN(arg, ":", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("invalid argument format '%s', expected key:value", arg)
+				}
+				// Try to parse value as number, fallback to string
+				if val, err := strconv.ParseFloat(parts[1], 64); err == nil {
+					txArgs[parts[0]] = val
+				} else if val, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+					txArgs[parts[0]] = val
+				} else if val, err := strconv.ParseBool(parts[1]); err == nil {
+					txArgs[parts[0]] = val
+				} else {
+					txArgs[parts[0]] = parts[1]
+				}
+			}
+
+			req := RPCRequest{
+				ID:     1,
+				Method: "accumen.simulate",
+				Params: map[string]interface{}{
+					"contract": contract,
+					"entry":    entry,
+					"args":     txArgs,
+				},
+			}
+
+			var resp struct {
+				Result *SimulateRPCResult `json:"result"`
+				Error  *RPCError          `json:"error"`
+			}
+
+			if err := makeRPCCall(req, &resp); err != nil {
+				return fmt.Errorf("RPC call failed: %v", err)
+			}
+
+			if resp.Error != nil {
+				return fmt.Errorf("RPC error: %s", resp.Error.Message)
+			}
+
+			if resp.Result == nil {
+				return fmt.Errorf("no result returned")
+			}
+
+			// Pretty-print the result
+			result := map[string]interface{}{
+				"contract":            contract,
+				"entry":               entry,
+				"args":                txArgs,
+				"success":             resp.Result.Success,
+				"gas_used":            resp.Result.GasUsed,
+				"l0_credits":          resp.Result.L0Credits,
+				"acme_cost":           resp.Result.ACME,
+				"estimated_dn_bytes":  resp.Result.EstimatedDNBytes,
+				"events_count":        len(resp.Result.Events),
+			}
+
+			if resp.Result.Error != "" {
+				result["error"] = resp.Result.Error
+			}
+
+			if len(resp.Result.Events) > 0 {
+				result["events"] = resp.Result.Events
+			}
+
+			prettyPrint(result)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&contract, "contract", "", "Contract address (required)")
+	cmd.Flags().StringVar(&entry, "entry", "", "Entry point function (required)")
+	cmd.Flags().StringArrayVar(&args, "arg", []string{}, "Function arguments in key:value format (repeatable)")
+
+	return cmd
+}
+
+// SimulateRPCResult represents the result of accumen.simulate RPC call
+type SimulateRPCResult struct {
+	GasUsed          uint64             `json:"gasUsed"`
+	Events           []SimulateEvent    `json:"events"`
+	L0Credits        uint64             `json:"l0Credits"`
+	ACME             string             `json:"acme"`
+	EstimatedDNBytes uint64             `json:"estimatedDNBytes"`
+	Success          bool               `json:"success"`
+	Error            string             `json:"error,omitempty"`
+}
+
+// SimulateEvent represents an event in the simulate result
+type SimulateEvent struct {
+	Type string `json:"type"`
+	Data string `json:"data"` // hex-encoded
 }
 
 // scopeCommand creates the scope command with subcommands
