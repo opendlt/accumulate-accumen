@@ -1201,6 +1201,197 @@ curl -X POST https://testnet.accumulatenetwork.io/v3 \
 
 This completes the setup process. Your contract can now legally stage L0 operations through the delegated ADI authority, enabling powerful cross-chain capabilities while maintaining security through Accumulate's authority system.
 
+## Meeting a Key Page m-of-n Threshold (Manual/Offline)
+
+Accumulate Key Pages can be configured with threshold requirements (e.g., 2-of-3, 3-of-5) where multiple signatures are required to authorize transactions. Accumen supports offline multi-signature workflows for meeting these thresholds.
+
+### Scenario
+
+You have a Key Page with a 2-of-3 threshold that requires signatures from at least 2 out of 3 authorized keys. The keys are distributed across different machines for security.
+
+### Prerequisites
+
+1. **Keystore Setup**: Each signer has their own keystore with their respective key
+2. **Transaction Envelope**: An unsigned transaction envelope ready for signing
+3. **Coordination**: A secure way to share the envelope between signers
+
+### Step-by-Step Process
+
+#### 1. Initialize Keystores (Each Signer)
+
+```bash
+# Signer A initializes their keystore
+accucli keystore init --path ./keystore-alice
+
+# Signer B initializes their keystore
+accucli keystore init --path ./keystore-bob
+
+# Signer C initializes their keystore
+accucli keystore init --path ./keystore-charlie
+```
+
+#### 2. Import or Generate Keys
+
+```bash
+# Signer A imports their key
+accucli keystore import --keystore ./keystore-alice --alias alice-key --priv <ALICE_PRIVATE_KEY_HEX>
+
+# Signer B imports their key
+accucli keystore import --keystore ./keystore-bob --alias bob-key --priv <BOB_PRIVATE_KEY_HEX>
+
+# Signer C imports their key
+accucli keystore import --keystore ./keystore-charlie --alias charlie-key --priv <CHARLIE_PRIVATE_KEY_HEX>
+```
+
+#### 3. Create Transaction Envelope
+
+The transaction initiator creates an unsigned envelope (this could be done by any party or automated system):
+
+```bash
+# This step depends on your specific transaction type
+# For example, using the L1 sequencer to create a WriteData transaction
+# The envelope is created but not yet signed
+
+# Example unsigned envelope (base64):
+export UNSIGNED_ENVELOPE="eyJoZWFkZXIi..."
+```
+
+#### 4. First Signature (Signer A)
+
+```bash
+# Alice signs the envelope with her key
+accucli tx sign \
+  --envelope $UNSIGNED_ENVELOPE \
+  --keystore ./keystore-alice \
+  --alias alice-key
+
+# Output includes the signed envelope:
+{
+  "success": true,
+  "signed_aliases": ["alice-key"],
+  "keystore": "./keystore-alice",
+  "envelope": "eyJoZWFkZXIi...",  // New base64 envelope with Alice's signature
+  "note": "Envelope has been signed with the specified keys"
+}
+
+# Save the signed envelope
+export SIGNED_BY_ALICE="eyJoZWFkZXIi..."
+```
+
+#### 5. Second Signature (Signer B)
+
+```bash
+# Bob receives the envelope signed by Alice and adds his signature
+accucli tx sign \
+  --envelope $SIGNED_BY_ALICE \
+  --keystore ./keystore-bob \
+  --alias bob-key
+
+# Output includes the envelope with both signatures:
+{
+  "success": true,
+  "signed_aliases": ["bob-key"],
+  "keystore": "./keystore-bob",
+  "envelope": "eyJoZWFkZXIi...",  // New base64 envelope with Alice's + Bob's signatures
+  "note": "Envelope has been signed with the specified keys"
+}
+
+# Save the envelope with both signatures
+export SIGNED_BY_ALICE_AND_BOB="eyJoZWFkZXIi..."
+```
+
+#### 6. Submit the Multi-Signed Envelope
+
+```bash
+# Submit the envelope with 2 signatures (meeting the 2-of-3 threshold)
+accucli tx submit \
+  --envelope $SIGNED_BY_ALICE_AND_BOB \
+  --l0 https://testnet.accumulate.net/v3
+
+# Output:
+{
+  "success": true,
+  "transaction_hash": "abc123...",
+  "l0_endpoint": "https://testnet.accumulate.net/v3"
+}
+```
+
+### Advanced: Multiple Signatures in One Command
+
+If a single party has access to multiple keys, they can sign with multiple aliases in one command:
+
+```bash
+# Sign with multiple keys from the same keystore
+accucli tx sign \
+  --envelope $UNSIGNED_ENVELOPE \
+  --keystore ./keystore-multi \
+  --alias key1 \
+  --alias key2 \
+  --alias key3
+```
+
+### Security Considerations
+
+1. **Key Distribution**: Never store multiple threshold keys on the same machine
+2. **Envelope Verification**: Validate envelope contents before signing
+3. **Secure Transport**: Use secure channels to share envelopes between signers
+4. **Audit Trail**: Log all signing operations with timestamps and key aliases
+5. **Backup**: Maintain secure backups of keystores
+
+### Troubleshooting
+
+#### Invalid Signatures
+```bash
+# Verify envelope before submission
+accucli tx submit --envelope $ENVELOPE --l0 $L0_ENDPOINT --dry-run
+```
+
+#### Missing Keys
+```bash
+# List available keys in keystore
+accucli keystore list --keystore ./keystore-path
+```
+
+#### Threshold Not Met
+Ensure you have enough signatures. Check the Key Page configuration:
+- Query the Key Page on Accumulate to verify the threshold requirement
+- Count the signatures in your envelope
+- Verify all signatures are from authorized keys
+
+### Example: 3-of-5 Threshold
+
+For a 3-of-5 threshold, you need at least 3 signatures:
+
+```bash
+# Step 1: Create base envelope (unsigned)
+export BASE_ENVELOPE="..."
+
+# Step 2: Signer 1 signs
+export ENV_1=$(accucli tx sign --envelope $BASE_ENVELOPE --keystore ./ks1 --alias key1 | jq -r '.envelope')
+
+# Step 3: Signer 2 adds their signature
+export ENV_2=$(accucli tx sign --envelope $ENV_1 --keystore ./ks2 --alias key2 | jq -r '.envelope')
+
+# Step 4: Signer 3 adds their signature (threshold met)
+export ENV_3=$(accucli tx sign --envelope $ENV_2 --keystore ./ks3 --alias key3 | jq -r '.envelope')
+
+# Step 5: Submit
+accucli tx submit --envelope $ENV_3 --l0 $L0_ENDPOINT
+```
+
+### Integration with Authority Bindings
+
+When using Accumen's authority binding system, the keystore aliases should match the aliases configured in the bindings:
+
+```bash
+# List bindings to see which keys are configured for which contracts
+accucli authority list --config ./accumen.yaml
+
+# The key aliases in your keystore should match the KeyAlias field in the bindings
+```
+
+This ensures that the contract-specific signer selection works correctly with your multi-signature workflow.
+
 ## Next Steps
 
 - Explore more complex contract patterns
