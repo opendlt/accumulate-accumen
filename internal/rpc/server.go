@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -21,7 +22,84 @@ import (
 	"github.com/opendlt/accumulate-accumen/types/l1"
 	"github.com/opendlt/accumulate-accumen/types/proto/accumen"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/opendlt/accumulate-accumen/internal/config"
 )
+
+// Standardized JSON-RPC Error Codes
+const (
+	// Standard JSON-RPC errors
+	ErrCodeParseError     = -32700 // Invalid JSON
+	ErrCodeInvalidRequest = -32600 // Invalid Request object
+	ErrCodeMethodNotFound = -32601 // Method not found
+	ErrCodeInvalidParams  = -32602 // Invalid method parameters
+	ErrCodeInternalError  = -32603 // Internal JSON-RPC error
+
+	// Custom authentication errors
+	ErrCodeUnauthorized = -32401 // Unauthorized (invalid API key)
+	ErrCodeForbidden    = -32403 // Forbidden (insufficient permissions)
+	ErrCodeRateLimit    = -32429 // Too Many Requests
+
+	// Accumen-specific errors
+	ErrCodeAuthorityNotPermitted   = -33001 // L0 authority validation failed
+	ErrCodeContractPaused          = -33002 // Contract is paused/inactive
+	ErrCodeDeterminismViolation    = -33003 // WASM determinism audit failed
+	ErrCodeInsufficientCredits     = -33004 // Insufficient L0 credits
+	ErrCodeContractNotFound        = -33005 // Contract does not exist
+	ErrCodeInvalidContractAddress  = -33006 // Invalid contract address format
+	ErrCodeTransactionFailed       = -33007 // Transaction execution failed
+	ErrCodeGasLimitExceeded        = -33008 // Gas limit exceeded
+	ErrCodeInvalidNonce            = -33009 // Invalid or replay nonce
+	ErrCodeMempoolFull             = -33010 // Mempool is full
+	ErrCodeValidationFailed        = -33011 // Transaction validation failed
+	ErrCodeStateError              = -33012 // State operation failed
+	ErrCodeVersionNotFound         = -33013 // Contract version not found
+	ErrCodeMigrationFailed         = -33014 // Contract migration failed
+	ErrCodeUpgradeNotAllowed       = -33015 // Contract upgrade not permitted
+	ErrCodeNamespaceReserved       = -33016 // Namespace is reserved
+	ErrCodeServiceUnavailable      = -33017 // Service temporarily unavailable
+)
+
+// Error code to message mapping
+var errorMessages = map[int]string{
+	ErrCodeParseError:              "Parse error",
+	ErrCodeInvalidRequest:          "Invalid Request",
+	ErrCodeMethodNotFound:          "Method not found",
+	ErrCodeInvalidParams:           "Invalid params",
+	ErrCodeInternalError:           "Internal error",
+	ErrCodeUnauthorized:            "Unauthorized",
+	ErrCodeForbidden:               "Forbidden",
+	ErrCodeRateLimit:               "Rate limit exceeded",
+	ErrCodeAuthorityNotPermitted:   "Authority not permitted",
+	ErrCodeContractPaused:          "Contract paused",
+	ErrCodeDeterminismViolation:    "Determinism violation",
+	ErrCodeInsufficientCredits:     "Insufficient credits",
+	ErrCodeContractNotFound:        "Contract not found",
+	ErrCodeInvalidContractAddress:  "Invalid contract address",
+	ErrCodeTransactionFailed:       "Transaction failed",
+	ErrCodeGasLimitExceeded:        "Gas limit exceeded",
+	ErrCodeInvalidNonce:            "Invalid nonce",
+	ErrCodeMempoolFull:             "Mempool full",
+	ErrCodeValidationFailed:        "Validation failed",
+	ErrCodeStateError:              "State error",
+	ErrCodeVersionNotFound:         "Version not found",
+	ErrCodeMigrationFailed:         "Migration failed",
+	ErrCodeUpgradeNotAllowed:       "Upgrade not allowed",
+	ErrCodeNamespaceReserved:       "Namespace reserved",
+	ErrCodeServiceUnavailable:      "Service unavailable",
+}
+
+// NewRPCError creates a new RPC error with a standardized code
+func NewRPCError(code int, details string) *RPCError {
+	message := errorMessages[code]
+	if message == "" {
+		message = "Unknown error"
+	}
+	if details != "" {
+		message = fmt.Sprintf("%s: %s", message, details)
+	}
+	return &RPCError{Code: code, Message: message}
+}
 
 // Server provides a JSON-RPC interface for Accumen
 type Server struct {
@@ -35,6 +113,12 @@ type Server struct {
 	readOnly      bool
 	running       bool
 	stats         *ServerStats
+
+	// Middleware components
+	apiKeyMiddleware *APIKeyMiddleware
+	rateLimiter      *RateLimiter
+	corsMiddleware   *CORSMiddleware
+	config           *config.Config
 }
 
 // Dependencies holds the required dependencies for the RPC server
@@ -43,12 +127,14 @@ type Dependencies struct {
 	KVStore       state.KVStore
 	ContractStore *contracts.Store
 	Mempool       *sequencer.PersistentMempool
+	Config        *config.Config
 }
 
 // ReadOnlyDependencies holds dependencies for read-only (follower) mode
 type ReadOnlyDependencies struct {
 	KVStore state.KVStore
 	Indexer *indexer.Indexer
+	Config  *config.Config
 }
 
 // Request represents a JSON-RPC request
@@ -194,7 +280,7 @@ type ServerStats struct {
 
 // NewServer creates a new RPC server
 func NewServer(deps *Dependencies) *Server {
-	return &Server{
+	server := &Server{
 		sequencer:     deps.Sequencer,
 		kvStore:       deps.KVStore,
 		contractStore: deps.ContractStore,
@@ -202,22 +288,38 @@ func NewServer(deps *Dependencies) *Server {
 		readOnly:      false,
 		running:       false,
 		stats:         &ServerStats{StartTime: time.Now()},
+		config:        deps.Config,
 	}
+
+	// Initialize middleware
+	server.apiKeyMiddleware = NewAPIKeyMiddleware(deps.Config.Server.APIKeys)
+	server.rateLimiter = NewRateLimiter(deps.Config.Server.Rate.RPS, deps.Config.Server.Rate.Burst)
+	server.corsMiddleware = NewCORSMiddleware(deps.Config.Server.CORS.Origins)
+
+	return server
 }
 
 // NewReadOnlyServer creates a new read-only RPC server for followers
 func NewReadOnlyServer(deps *ReadOnlyDependencies) *Server {
-	return &Server{
+	server := &Server{
 		kvStore:  deps.KVStore,
 		indexer:  deps.Indexer,
 		readOnly: true,
 		running:  false,
 		stats:    &ServerStats{StartTime: time.Now()},
+		config:   deps.Config,
 	}
+
+	// Initialize middleware
+	server.apiKeyMiddleware = NewAPIKeyMiddleware(deps.Config.Server.APIKeys)
+	server.rateLimiter = NewRateLimiter(deps.Config.Server.Rate.RPS, deps.Config.Server.Rate.Burst)
+	server.corsMiddleware = NewCORSMiddleware(deps.Config.Server.CORS.Origins)
+
+	return server
 }
 
-// Start starts the RPC server on the specified address
-func (s *Server) Start(addr string) error {
+// Start starts the RPC server
+func (s *Server) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -225,29 +327,64 @@ func (s *Server) Start(addr string) error {
 		return fmt.Errorf("RPC server is already running")
 	}
 
-	// Create HTTP server
+	// Create HTTP server with middleware stack
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleRequest)
 	mux.HandleFunc("/health", s.handleHealth)
 
+	// Build middleware chain
+	var handler http.Handler = mux
+
+	// Apply middleware in reverse order (last middleware wraps first)
+	handler = LoggingMiddleware(handler)
+	handler = SecurityHeadersMiddleware(handler)
+	handler = s.corsMiddleware.Middleware(handler)
+	handler = s.rateLimiter.Middleware(handler)
+	handler = s.apiKeyMiddleware.Middleware(handler)
+
+	// Use configured address
+	addr := s.config.Server.Addr
+	if addr == "" {
+		addr = ":8666"
+	}
+
 	s.server = &http.Server{
 		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
+		Handler:      handler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Configure TLS if certificates are provided
+	var tlsConfig *tls.Config
+	if s.config.Server.TLS.Cert != "" && s.config.Server.TLS.Key != "" {
+		var err error
+		tlsConfig, err = LoadTLSConfig(s.config.Server.TLS.Cert, s.config.Server.TLS.Key)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS configuration: %w", err)
+		}
+		s.server.TLSConfig = tlsConfig
 	}
 
 	s.running = true
 
 	// Start server in background
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if tlsConfig != nil {
+			fmt.Printf("HTTPS RPC server starting on %s\n", addr)
+			err = s.server.ListenAndServeTLS("", "")
+		} else {
+			fmt.Printf("HTTP RPC server starting on %s\n", addr)
+			err = s.server.ListenAndServe()
+		}
+
+		if err != nil && err != http.ErrServerClosed {
 			fmt.Printf("RPC server error: %v\n", err)
 		}
 	}()
 
-	fmt.Printf("RPC server started on %s\n", addr)
 	return nil
 }
 
@@ -262,6 +399,11 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	s.running = false
 
+	// Cleanup rate limiter
+	if s.rateLimiter != nil {
+		s.rateLimiter.Close()
+	}
+
 	if s.server != nil {
 		return s.server.Shutdown(ctx)
 	}
@@ -271,28 +413,24 @@ func (s *Server) Stop(ctx context.Context) error {
 
 // handleRequest handles JSON-RPC requests
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	// Set CORS headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Content-Type", "application/json")
-
-	// Handle preflight OPTIONS request
-	if r.Method == "OPTIONS" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
 
 	// Only accept POST requests for JSON-RPC
 	if r.Method != "POST" {
-		s.writeError(w, nil, -32600, "Invalid Request")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(Response{
+			Error: NewRPCError(ErrCodeMethodNotFound, "Only POST method is allowed"),
+		})
 		return
 	}
 
 	// Parse request
 	var req Request
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, nil, -32700, "Parse error")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(Response{
+			Error: NewRPCError(ErrCodeParseError, err.Error()),
+		})
 		return
 	}
 
@@ -342,12 +480,12 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		result, err = s.handleGetBlockHeader(req.Params)
 	case "accumen.simulate":
 		if s.readOnly {
-			err = &RPCError{Code: -32601, Message: "Method not available in read-only mode"}
+			err = NewRPCError(ErrCodeMethodNotFound, "Method not available in read-only mode")
 		} else {
 			result, err = s.handleSimulate(req.Params)
 		}
 	default:
-		err = &RPCError{Code: -32601, Message: "Method not found"}
+		err = NewRPCError(ErrCodeMethodNotFound, "Method '"+req.Method+"' not found")
 	}
 
 	// Track errors
@@ -389,7 +527,7 @@ func (s *Server) handleStatus() (interface{}, *RPCError) {
 	if s.readOnly {
 		// Follower mode status
 		if s.indexer == nil {
-			return nil, &RPCError{Code: -32603, Message: "Indexer not available"}
+			return nil, NewRPCError(ErrCodeServiceUnavailable, "Indexer not available")
 		}
 
 		indexerStats := s.indexer.GetStats()
@@ -407,7 +545,7 @@ func (s *Server) handleStatus() (interface{}, *RPCError) {
 
 	// Sequencer mode status
 	if !s.sequencer.IsRunning() {
-		return nil, &RPCError{Code: -32603, Message: "Sequencer not running"}
+		return nil, NewRPCError(ErrCodeServiceUnavailable, "Sequencer not running")
 	}
 
 	stats := s.sequencer.GetStats()
@@ -438,17 +576,17 @@ func (s *Server) handleStatus() (interface{}, *RPCError) {
 // handleSubmitTx handles accumen.submitTx() method
 func (s *Server) handleSubmitTx(params interface{}) (interface{}, *RPCError) {
 	if !s.sequencer.IsRunning() {
-		return nil, &RPCError{Code: -32603, Message: "Sequencer not running"}
+		return nil, NewRPCError(ErrCodeServiceUnavailable, "Sequencer not running")
 	}
 
 	if s.mempool == nil {
-		return nil, &RPCError{Code: -32603, Message: "Persistent mempool not available"}
+		return nil, NewRPCError(ErrCodeServiceUnavailable, "Persistent mempool not available")
 	}
 
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var submitParams SubmitTxParams
@@ -541,7 +679,7 @@ func (s *Server) handleQuery(params interface{}) (interface{}, *RPCError) {
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var queryParams QueryParams
@@ -705,7 +843,7 @@ func (s *Server) handleGetTx(params interface{}) (interface{}, *RPCError) {
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var getTxParams GetTxParams
@@ -750,7 +888,7 @@ func (s *Server) handleDeployContract(params interface{}) (interface{}, *RPCErro
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var deployParams DeployContractParams
@@ -790,7 +928,7 @@ func (s *Server) handleDeployContract(params interface{}) (interface{}, *RPCErro
 	// Comprehensive WASM audit for determinism
 	auditReport := runtime.AuditWASMModule(wasmBytes)
 	if !auditReport.Ok {
-		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM audit failed: %s", strings.Join(auditReport.Reasons, "; "))}
+		return nil, NewRPCError(ErrCodeDeterminismViolation, strings.Join(auditReport.Reasons, "; "))
 	}
 
 	// Check namespace permissions if sequencer is available
@@ -836,7 +974,7 @@ func (s *Server) handleUpgradeContract(params interface{}) (interface{}, *RPCErr
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var upgradeParams UpgradeContractParams
@@ -863,7 +1001,7 @@ func (s *Server) handleUpgradeContract(params interface{}) (interface{}, *RPCErr
 		if engine != nil {
 			ctx := context.Background()
 			if err := engine.ValidateNamespacePermission(ctx, upgradeParams.Addr); err != nil {
-				return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("L0 authority validation failed: %v", err)}
+				return nil, NewRPCError(ErrCodeAuthorityNotPermitted, err.Error())
 			}
 		}
 	}
@@ -887,7 +1025,7 @@ func (s *Server) handleUpgradeContract(params interface{}) (interface{}, *RPCErr
 	// Comprehensive WASM audit for determinism
 	auditReport := runtime.AuditWASMModule(wasmBytes)
 	if !auditReport.Ok {
-		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM audit failed: %s", strings.Join(auditReport.Reasons, "; "))}
+		return nil, NewRPCError(ErrCodeDeterminismViolation, strings.Join(auditReport.Reasons, "; "))
 	}
 
 	// Save new version
@@ -929,7 +1067,7 @@ func (s *Server) handleActivateVersion(params interface{}) (interface{}, *RPCErr
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var activateParams ActivateVersionParams
@@ -956,7 +1094,7 @@ func (s *Server) handleActivateVersion(params interface{}) (interface{}, *RPCErr
 		if engine != nil {
 			ctx := context.Background()
 			if err := engine.ValidateNamespacePermission(ctx, activateParams.Addr); err != nil {
-				return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("L0 authority validation failed: %v", err)}
+				return nil, NewRPCError(ErrCodeAuthorityNotPermitted, err.Error())
 			}
 		}
 	}
@@ -979,7 +1117,7 @@ func (s *Server) handleGetL1Receipt(params interface{}) (interface{}, *RPCError)
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var receiptParams GetL1ReceiptParams
@@ -1082,7 +1220,7 @@ func (s *Server) handleGetTxReceipt(params interface{}) (interface{}, *RPCError)
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var receiptParams GetTxReceiptParams
@@ -1154,7 +1292,7 @@ func (s *Server) handleGetBlockHeader(params interface{}) (interface{}, *RPCErro
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var headerParams GetBlockHeaderParams
@@ -1232,6 +1370,17 @@ func (s *Server) writeError(w http.ResponseWriter, id interface{}, code int, mes
 	json.NewEncoder(w).Encode(response)
 }
 
+// writeErrorResponse writes an RPC error response using standardized errors
+func (s *Server) writeErrorResponse(w http.ResponseWriter, id interface{}, rpcErr *RPCError) {
+	response := Response{
+		ID:    id,
+		Error: rpcErr,
+	}
+
+	w.WriteHeader(http.StatusOK) // JSON-RPC errors still return 200
+	json.NewEncoder(w).Encode(response)
+}
+
 // IsRunning returns whether the server is running
 func (s *Server) IsRunning() bool {
 	s.mu.RLock()
@@ -1300,7 +1449,7 @@ func (s *Server) handleSimulate(params interface{}) (interface{}, *RPCError) {
 	// Parse parameters
 	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+		return nil, NewRPCError(ErrCodeInvalidParams, "Invalid params")
 	}
 
 	var simulateParams SimulateParams
