@@ -303,15 +303,8 @@ func BuildAddCreditsToKeyPage(keyPageURL string, creditAmount uint64) (*build.En
 		return nil, fmt.Errorf("invalid key page URL %s: %w", keyPageURL, err)
 	}
 
-	// Create the add credits transaction
-	envelope := build.Transaction().
-		For(keyPageURLParsed).
-		Body(&build.AddCredits{
-			Recipient: keyPageURLParsed,
-			Amount:    build.BigInt(creditAmount),
-		})
-
-	return envelope, nil
+	// Use the builder helper with nil token source (will use default oracle)
+	return BuildAddCredits(keyPageURLParsed, nil, creditAmount, "Add credits to key page"), nil
 }
 
 // BuildCreateDataAccount creates a transaction builder for creating a data account
@@ -346,14 +339,8 @@ func BuildWriteDataToAccount(dataAccountURL string, data []byte) (*build.Envelop
 		return nil, fmt.Errorf("invalid data account URL %s: %w", dataAccountURL, err)
 	}
 
-	// Create the write data transaction
-	envelope := build.Transaction().
-		For(dataAccountURLParsed).
-		Body(&build.WriteData{
-			Entry: data,
-		})
-
-	return envelope, nil
+	// Use the builder helper
+	return BuildWriteData(dataAccountURLParsed, data, "Write data to account", nil), nil
 }
 
 // Helper function to decode a hex-encoded public key

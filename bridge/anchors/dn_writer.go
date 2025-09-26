@@ -115,12 +115,8 @@ func (w *DNWriter) WriteMetadata(ctx context.Context, jsonBytes []byte, basePath
 		return "", fmt.Errorf("failed to generate metadata URL: %w", err)
 	}
 
-	// Create WriteData transaction
-	envelope := build.Transaction().
-		For(dataURL).
-		Body(&build.WriteData{
-			Entry: jsonBytes,
-		})
+	// Create WriteData transaction using builder
+	envelope := l0api.BuildWriteData(dataURL, jsonBytes, "Accumen metadata", nil)
 
 	// Submit the transaction
 	txID, err := w.submitWithRetry(ctx, envelope)
@@ -154,12 +150,8 @@ func (w *DNWriter) WriteAnchor(ctx context.Context, blob []byte, basePath string
 		return "", fmt.Errorf("failed to generate anchor URL: %w", err)
 	}
 
-	// Create WriteData transaction for anchor
-	envelope := build.Transaction().
-		For(anchorURL).
-		Body(&build.WriteData{
-			Entry: blob,
-		})
+	// Create WriteData transaction for anchor using builder
+	envelope := l0api.BuildWriteData(anchorURL, blob, "Accumen anchor", nil)
 
 	// Submit the transaction
 	txID, err := w.submitWithRetry(ctx, envelope)

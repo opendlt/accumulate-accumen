@@ -75,15 +75,8 @@ func (m *Manager) EnsureCredits(ctx context.Context, page *url.URL, want uint64,
 	acmeNeeded := new(big.Int)
 	acmeNeeded.SetUint64(uint64(acmeNeededFloat * 1e8)) // Convert to precision units (1e8 = 100,000,000 precision)
 
-	// Build AddCredits transaction with the calculated ACME amount
-	envelope := build.Transaction().
-		For(page).
-		Body(&build.AddCredits{
-			Recipient: page,
-			Amount:    (*build.BigInt)(acmeNeeded),
-			// Oracle is automatically set by the build package for credit purchases
-		}).
-		Memo("accumen-topup") // Add memo as requested
+	// Build AddCredits transaction using builder helper
+	envelope := l0api.BuildAddCredits(page, fundFrom, creditsNeeded, "accumen-topup")
 
 	return envelope, true, nil
 }
