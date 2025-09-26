@@ -254,3 +254,57 @@ func GetPublicKey(signer Signer) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("unsupported signer type for public key extraction")
 	}
 }
+
+// GenerateEd25519 generates a new Ed25519 key pair and returns public and private keys as hex strings
+func GenerateEd25519() (pubHex, privHex string, err error) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate Ed25519 key pair: %w", err)
+	}
+
+	pubHex = hex.EncodeToString(publicKey)
+	privHex = hex.EncodeToString(privateKey)
+
+	return pubHex, privHex, nil
+}
+
+// LoadFromFile loads a private key from a file and returns it as hex string
+func LoadFromFile(path string) (privHex string, err error) {
+	keyData, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read key file %s: %w", path, err)
+	}
+
+	// Parse the key to validate it
+	privateKey, err := parsePrivateKey(strings.TrimSpace(string(keyData)))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse private key from %s: %w", path, err)
+	}
+
+	// Return as hex string
+	return hex.EncodeToString(privateKey), nil
+}
+
+// SaveToFile saves a private key (in hex format) to a file with secure permissions
+func SaveToFile(path, privHex string) error {
+	// Validate the private key format
+	privKey, err := hex.DecodeString(privHex)
+	if err != nil {
+		return fmt.Errorf("invalid private key hex format: %w", err)
+	}
+
+	if len(privKey) != ed25519.PrivateKeySize {
+		return fmt.Errorf("invalid private key size: expected %d bytes, got %d bytes",
+			ed25519.PrivateKeySize, len(privKey))
+	}
+
+	// Write the key to file with secure permissions
+	// On Unix-like systems, this sets 0600 (read/write for owner only)
+	// On Windows, this is best-effort due to different permission model
+	err = os.WriteFile(path, []byte(privHex), 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write key file %s: %w", path, err)
+	}
+
+	return nil
+}

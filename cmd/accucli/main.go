@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
+	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 )
 
 var (
@@ -35,6 +37,7 @@ func main() {
 		deployCommand(),
 		submitCommand(),
 		queryCommand(),
+		keysCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -290,6 +293,127 @@ func queryCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&contract, "contract", "", "Contract address (required)")
 	cmd.Flags().StringVar(&key, "key", "", "State key to query (required)")
+
+	return cmd
+}
+
+func keysCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "keys",
+		Short: "Key management utilities",
+		Long:  "Generate, save, and display Ed25519 keys for Accumen",
+	}
+
+	cmd.AddCommand(keysGenCommand())
+	cmd.AddCommand(keysSaveCommand())
+	cmd.AddCommand(keysShowCommand())
+
+	return cmd
+}
+
+func keysGenCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "gen",
+		Short: "Generate a new Ed25519 key pair",
+		Long:  "Generate a new Ed25519 key pair and display public and private keys in hex format",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pubHex, privHex, err := signer.GenerateEd25519()
+			if err != nil {
+				return fmt.Errorf("failed to generate key pair: %v", err)
+			}
+
+			prettyPrint(map[string]interface{}{
+				"public_key":  pubHex,
+				"private_key": privHex,
+				"note":        "Store the private key securely. It will not be shown again.",
+			})
+
+			return nil
+		},
+	}
+}
+
+func keysSaveCommand() *cobra.Command {
+	var filePath string
+	var privKey string
+
+	cmd := &cobra.Command{
+		Use:   "save",
+		Short: "Save a private key to a file",
+		Long:  "Save a private key (in hex format) to a file with secure permissions (0600)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if filePath == "" {
+				return fmt.Errorf("--file is required")
+			}
+			if privKey == "" {
+				return fmt.Errorf("--priv is required")
+			}
+
+			err := signer.SaveToFile(filePath, privKey)
+			if err != nil {
+				return fmt.Errorf("failed to save key: %v", err)
+			}
+
+			prettyPrint(map[string]interface{}{
+				"success": true,
+				"file":    filePath,
+				"permissions": "0600 (owner read/write only)",
+				"note":    "Key saved securely. Verify file permissions on your system.",
+			})
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&filePath, "file", "", "Path to save the private key file (required)")
+	cmd.Flags().StringVar(&privKey, "priv", "", "Private key in hex format (required)")
+
+	return cmd
+}
+
+func keysShowCommand() *cobra.Command {
+	var filePath string
+
+	cmd := &cobra.Command{
+		Use:   "show",
+		Short: "Display the private key from a file",
+		Long:  "Load and display the private key from a file (in hex format)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if filePath == "" {
+				return fmt.Errorf("--file is required")
+			}
+
+			privHex, err := signer.LoadFromFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to load key: %v", err)
+			}
+
+			// Calculate public key from private key
+			privBytes, err := hex.DecodeString(privHex)
+			if err != nil {
+				return fmt.Errorf("invalid private key format: %v", err)
+			}
+
+			// For Ed25519, the public key is the last 32 bytes of the 64-byte private key
+			// Or we can derive it properly
+			if len(privBytes) != 64 {
+				return fmt.Errorf("invalid private key length: expected 64 bytes, got %d", len(privBytes))
+			}
+
+			publicKey := privBytes[32:] // Ed25519 public key is stored as second half
+
+			prettyPrint(map[string]interface{}{
+				"file":        filePath,
+				"private_key": privHex,
+				"public_key":  hex.EncodeToString(publicKey),
+				"warning":     "Private key displayed. Ensure terminal output is secure.",
+			})
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&filePath, "file", "", "Path to the private key file (required)")
 
 	return cmd
 }

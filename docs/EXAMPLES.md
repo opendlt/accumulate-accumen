@@ -8,6 +8,188 @@ This guide shows how to use the Accumen CLI for local development, from building
 - Accumen sequencer running locally
 - `accucli` binary built and available
 
+## Generate a Dev Key and Configure Signer
+
+Before running the sequencer or interacting with contracts, you'll need to generate Ed25519 keys for signing transactions and configuring the signer.
+
+### Generate Keys
+
+Use the accucli tool to generate a new Ed25519 key pair:
+
+```bash
+# Build accucli if not already built
+go build -o bin/accucli ./cmd/accucli
+
+# Generate new Ed25519 key pair
+./bin/accucli keys gen
+```
+
+**Expected output:**
+```json
+{
+  "public_key": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+  "private_key": "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+  "note": "Store the private key securely. It will not be shown again."
+}
+```
+
+**Important:** Save the private key securely. You'll need it to configure the signer and for signing transactions.
+
+### Save Key to File
+
+Save the private key to a secure file:
+
+```bash
+# Save private key to a file with secure permissions (0600)
+./bin/accucli keys save \
+  --file ~/.accumen/dev-key.hex \
+  --priv b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef123456
+
+# Create directory first if it doesn't exist
+mkdir -p ~/.accumen
+```
+
+**Expected output:**
+```json
+{
+  "success": true,
+  "file": "/home/user/.accumen/dev-key.hex",
+  "permissions": "0600 (owner read/write only)",
+  "note": "Key saved securely. Verify file permissions on your system."
+}
+```
+
+### Display Key from File
+
+Verify the saved key:
+
+```bash
+# Display the key from the saved file
+./bin/accucli keys show --file ~/.accumen/dev-key.hex
+```
+
+**Expected output:**
+```json
+{
+  "file": "/home/user/.accumen/dev-key.hex",
+  "private_key": "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef123456",
+  "public_key": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+  "warning": "Private key displayed. Ensure terminal output is secure."
+}
+```
+
+### Configure Signer in config/local.yaml
+
+Update your Accumen configuration to use the file-based signer:
+
+```yaml
+# config/local.yaml
+
+# Signer configuration
+signer:
+  type: "file"
+  key: "/home/user/.accumen/dev-key.hex"
+
+# Bridge configuration (if using L0 integration)
+bridge:
+  enableBridge: true
+  client:
+    serverURL: "https://testnet.accumulatenetwork.io/v3"
+    sequencerKey: ""  # Leave empty when using signer config
+
+# Events configuration for transaction confirmations
+events:
+  enable: true
+  reconnectMin: "1s"
+  reconnectMax: "30s"
+
+# Other sequencer settings
+blockTime: "2s"
+maxTransactions: 100
+```
+
+### Alternative Signer Configurations
+
+#### Environment Variable Signer
+
+If you prefer to use environment variables:
+
+```bash
+# Set the private key in an environment variable
+export ACCUMEN_PRIVATE_KEY="b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef123456"
+```
+
+Update config/local.yaml:
+```yaml
+signer:
+  type: "env"
+  key: "ACCUMEN_PRIVATE_KEY"
+```
+
+#### Development Signer (Insecure)
+
+For local development only (not production):
+
+```yaml
+signer:
+  type: "dev"
+  key: ""  # Uses default dev key, or specify a custom hex key
+```
+
+Or with a custom development key:
+```yaml
+signer:
+  type: "dev"
+  key: "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef123456"
+```
+
+### Verify Configuration
+
+Start the sequencer with your key configuration:
+
+```bash
+# Start sequencer with configured signer
+go run ./cmd/accumen \
+  --role=sequencer \
+  --config=config/local.yaml \
+  --rpc=:8666 \
+  --log-level=info
+```
+
+You should see output indicating the signer is properly configured:
+```
+INFO[2024-01-15T10:30:00Z] Signer configured: type=file, path=/home/user/.accumen/dev-key.hex
+INFO[2024-01-15T10:30:00Z] Starting Accumen sequencer
+INFO[2024-01-15T10:30:00Z] RPC server started on :8666
+```
+
+### Security Best Practices
+
+1. **File Permissions**: Ensure private key files have restrictive permissions (0600)
+2. **Backup Keys**: Keep secure backups of your private keys
+3. **Environment Separation**: Use different keys for development, staging, and production
+4. **Key Rotation**: Regularly rotate keys in production environments
+5. **Never Commit Keys**: Never commit private keys to version control
+
+### Key Management Commands Reference
+
+```bash
+# Generate new key pair
+./bin/accucli keys gen
+
+# Save private key to file
+./bin/accucli keys save --file <path> --priv <hex-key>
+
+# Display key from file
+./bin/accucli keys show --file <path>
+
+# Help for keys commands
+./bin/accucli keys --help
+./bin/accucli keys gen --help
+./bin/accucli keys save --help
+./bin/accucli keys show --help
+```
+
 ## Example Walkthrough
 
 ### 1. Build a Rust Contract to WASM
