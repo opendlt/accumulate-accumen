@@ -82,14 +82,25 @@ func (c *ModuleCache) Prepare(moduleBytes []byte) (PreparedModule, [32]byte, err
 	// Compute hash
 	hash := sha256.Sum256(moduleBytes)
 
-	// Validate module bytes
-	metadata, err := c.validateModule(moduleBytes)
-	if err != nil {
-		return PreparedModule{}, hash, fmt.Errorf("module validation failed: %w", err)
+	// Run comprehensive audit on first Prepare
+	auditReport := AuditWASMModule(moduleBytes)
+	if !auditReport.Ok {
+		return PreparedModule{}, hash, fmt.Errorf("WASM audit failed: %s", strings.Join(auditReport.Reasons, "; "))
 	}
 
-	if !metadata.IsValid {
-		return PreparedModule{}, hash, fmt.Errorf("module validation failed: %s", metadata.ValidationError)
+	// Convert audit report to metadata
+	metadata := &ModuleMetadata{
+		MemoryPages:    auditReport.MemPages,
+		MaxMemoryPages: auditReport.MemPages,
+		Exports:        make(map[string]string),
+		Imports:        make(map[string]string),
+		HasFloatOps:    false, // Audit already rejected float ops
+		IsValid:        auditReport.Ok,
+	}
+
+	// Populate exports from audit
+	for _, exportName := range auditReport.Exports {
+		metadata.Exports[exportName] = "func"
 	}
 
 	// Compile the module
@@ -156,176 +167,7 @@ func (c *ModuleCache) Put(hash [32]byte, module PreparedModule) {
 	c.addToFront(node)
 }
 
-// validateModule performs comprehensive validation of a WASM module for determinism
-func (c *ModuleCache) validateModule(moduleBytes []byte) (*ModuleMetadata, error) {
-	metadata := &ModuleMetadata{
-		Exports: make(map[string]string),
-		Imports: make(map[string]string),
-	}
-
-	// Basic WASM header validation
-	if len(moduleBytes) < 8 {
-		metadata.ValidationError = "module too small"
-		return metadata, nil
-	}
-
-	if string(moduleBytes[:4]) != "\x00asm" {
-		metadata.ValidationError = "invalid WASM magic number"
-		return metadata, nil
-	}
-
-	// Parse module to get metadata (simplified parsing)
-	compiledModule, err := c.runtime.CompileModule(context.Background(), moduleBytes)
-	if err != nil {
-		metadata.ValidationError = fmt.Sprintf("compilation failed: %v", err)
-		return metadata, nil
-	}
-
-	// Get module definition for analysis
-	moduleDefn := compiledModule.(*moduleImpl) // This is wazero-specific, may need adjustment
-
-	// Validate memory constraints
-	if err := c.validateMemory(moduleDefn, metadata); err != nil {
-		metadata.ValidationError = err.Error()
-		return metadata, nil
-	}
-
-	// Validate exports
-	if err := c.validateExports(moduleDefn, metadata); err != nil {
-		metadata.ValidationError = err.Error()
-		return metadata, nil
-	}
-
-	// Validate imports (ensure only allowed host functions)
-	if err := c.validateImports(moduleDefn, metadata); err != nil {
-		metadata.ValidationError = err.Error()
-		return metadata, nil
-	}
-
-	// Check for non-deterministic operations (simplified check)
-	if err := c.validateDeterminism(moduleBytes, metadata); err != nil {
-		metadata.ValidationError = err.Error()
-		return metadata, nil
-	}
-
-	metadata.IsValid = true
-	return metadata, nil
-}
-
-// validateMemory checks memory limits and constraints
-func (c *ModuleCache) validateMemory(module wazero.CompiledModule, metadata *ModuleMetadata) error {
-	// Get memory information from compiled module
-	// This is a simplified implementation - real validation would inspect the module sections
-
-	// Set default memory constraints
-	metadata.MemoryPages = 1    // Default 64KB (1 page)
-	metadata.MaxMemoryPages = 64 // Max 4MB (64 pages)
-
-	// Validate against configuration limits
-	if c.config != nil {
-		maxPages := uint32(c.config.MaxMemoryPages)
-		if maxPages > 0 && metadata.MaxMemoryPages > maxPages {
-			return fmt.Errorf("module max memory pages %d exceeds limit %d", metadata.MaxMemoryPages, maxPages)
-		}
-	}
-
-	return nil
-}
-
-// validateExports ensures required exports are present
-func (c *ModuleCache) validateExports(module wazero.CompiledModule, metadata *ModuleMetadata) error {
-	// Get exported functions
-	exportedFunctions := module.ExportedFunctions()
-
-	for name := range exportedFunctions {
-		metadata.Exports[name] = "func"
-	}
-
-	// Check for required exports (for demo - increment function)
-	requiredExports := []string{"increment"}
-	for _, required := range requiredExports {
-		if _, exists := metadata.Exports[required]; !exists {
-			return fmt.Errorf("missing required export: %s", required)
-		}
-	}
-
-	return nil
-}
-
-// validateImports ensures only allowed host functions are imported
-func (c *ModuleCache) validateImports(module wazero.CompiledModule, metadata *ModuleMetadata) error {
-	// Get imported functions
-	importedFunctions := module.ImportedFunctions()
-
-	// List of allowed host function imports
-	allowedImports := map[string]bool{
-		"host.get":          true,
-		"host.put":          true,
-		"host.delete":       true,
-		"host.emit_event":   true,
-		"host.stage_op":     true,
-		"host.charge_gas":   true,
-		"host.log":          true,
-	}
-
-	for _, importDef := range importedFunctions {
-		importName := fmt.Sprintf("%s.%s", importDef.ModuleName(), importDef.Name())
-		metadata.Imports[importName] = "func"
-
-		if !allowedImports[importName] {
-			return fmt.Errorf("disallowed import: %s", importName)
-		}
-	}
-
-	return nil
-}
-
-// validateDeterminism checks for non-deterministic operations
-func (c *ModuleCache) validateDeterminism(moduleBytes []byte, metadata *ModuleMetadata) error {
-	// Simplified determinism check by scanning bytecode for prohibited opcodes
-	// In a full implementation, this would parse the WASM binary format properly
-
-	prohibited := [][]byte{
-		// Float operations (simplified check)
-		{0x2A}, // f32.add
-		{0x2B}, // f32.sub
-		{0x2C}, // f32.mul
-		{0x2D}, // f32.div
-		{0x38}, // f64.add
-		{0x39}, // f64.sub
-		{0x3A}, // f64.mul
-		{0x3B}, // f64.div
-		// Non-deterministic operations
-		{0x3F}, // current_memory (can be non-deterministic)
-		{0x40}, // grow_memory (can be non-deterministic)
-	}
-
-	for _, opcode := range prohibited {
-		if containsBytes(moduleBytes, opcode) {
-			metadata.HasFloatOps = true
-			return fmt.Errorf("module contains prohibited non-deterministic operations")
-		}
-	}
-
-	return nil
-}
-
-// containsBytes checks if haystack contains needle
-func containsBytes(haystack, needle []byte) bool {
-	for i := 0; i <= len(haystack)-len(needle); i++ {
-		match := true
-		for j := 0; j < len(needle); j++ {
-			if haystack[i+j] != needle[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
-}
+// Note: Module validation is now handled by the audit system in audit.go
 
 // moveToFront moves a node to the front of the LRU list
 func (c *ModuleCache) moveToFront(node *lruNode) {
@@ -414,9 +256,3 @@ func (c *ModuleCache) Clear() {
 	c.missCount = 0
 }
 
-// moduleImpl is a type assertion helper for wazero internals
-// This may need to be adjusted based on the actual wazero implementation
-type moduleImpl interface {
-	wazero.CompiledModule
-	// Additional methods for inspection if available
-}
