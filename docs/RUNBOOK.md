@@ -955,6 +955,70 @@ EOF
 
 This workflow enables rapid contract development and testing on a local Accumen network.
 
+## Testing
+
+### End-to-End Tests
+
+Accumen includes comprehensive end-to-end tests that exercise the complete authority binding and contract execution flow using the Accumulate simulator.
+
+#### Authority Sandbox Test
+
+The `AuthoritySandbox` test provides a complete integration test that covers:
+
+- **Accumulate Setup**: Creates ADI, key books, key pages, and token accounts
+- **Authority Binding**: Binds contract signers to L0 key books
+- **Contract Deployment**: Deploys and executes WASM contracts
+- **L1 Execution**: Calls contract methods with authority verification
+- **State Verification**: Validates both DN metadata and follower state synchronization
+
+**Running the Test:**
+
+```bash
+# Windows PowerShell
+$env:ACC_SIM=1; go test ./tests/e2e -run AuthoritySandbox -v
+
+# Windows Command Prompt
+set ACC_SIM=1 && go test ./tests/e2e -run AuthoritySandbox -v
+
+# Linux/macOS
+ACC_SIM=1 go test ./tests/e2e -run AuthoritySandbox -v
+```
+
+**Test Requirements:**
+- Set `ACC_SIM=1` environment variable to enable simulator tests
+- Tests are skipped by default to avoid simulator dependency in CI/CD
+
+**What the Test Verifies:**
+1. **Authority Chain**: ADI → Key Book → Key Page → Contract binding
+2. **L0 Integration**: Credit management and token operations
+3. **Contract Execution**: WASM deployment and method calls
+4. **Authority Verification**: `VerifyAuthority` and `VerifyAll` pass successfully
+5. **State Consistency**: Counter reaches expected value (2 after two increments)
+6. **DN Metadata**: Transaction metadata written to DN registry
+7. **Follower Sync**: Follower indexer can query and verify transaction state
+
+**Example Output:**
+```
+=== RUN   TestAuthoritySandbox
+    authority_sandbox_test.go:31: Starting Authority Sandbox E2E test...
+    authority_sandbox_test.go:45: Step 1: Creating ADI...
+    authority_sandbox_test.go:53: ADI created: acc://test-adi.acme (txid: a1b2c3...)
+    authority_sandbox_test.go:56: Step 2: Creating Key Book and Key Page...
+    authority_sandbox_test.go:66: Key book created: acc://test-adi.acme/book (txid: d4e5f6...)
+    authority_sandbox_test.go:75: Key page created: acc://test-adi.acme/book/1 (txid: g7h8i9...)
+    authority_sandbox_test.go:95: Step 4: Adding credits to key page...
+    authority_sandbox_test.go:134: Step 7: Deploying counter contract...
+    authority_sandbox_test.go:156: Step 9: Executing contract increment calls...
+    authority_sandbox_test.go:170: First increment successful (txid: tx1_increment, gas: 5000)
+    authority_sandbox_test.go:184: Second increment successful (txid: tx2_increment, gas: 5000)
+    authority_sandbox_test.go:189: Counter value verified: 2
+    authority_sandbox_test.go:258: ✅ Authority Sandbox E2E Test PASSED
+--- PASS: TestAuthoritySandbox (2.34s)
+PASS
+```
+
+This test ensures that the complete Accumen authority and execution pipeline works correctly from L0 identity management through L1 contract execution and state synchronization.
+
 ## Quick Start
 
 ### Local Development
