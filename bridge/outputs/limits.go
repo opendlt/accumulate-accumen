@@ -1,8 +1,14 @@
 package outputs
 
 import (
+	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
+
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+
+	"github.com/opendlt/accumulate-accumen/engine/state"
 )
 
 // Limits defines resource limits for output processing
@@ -358,4 +364,287 @@ func (l *Limits) CheckRateLimit(count int, duration time.Duration) RateLimitChec
 		Remaining: remaining,
 		ResetTime: time.Now().Add(duration),
 	}
+}
+
+// OperationCounter tracks per-operation counters with daily/hourly limits
+type OperationCounter struct {
+	mu    sync.RWMutex
+	store state.KV
+}
+
+// OperationCounterKey represents the key for operation counting
+type OperationCounterKey struct {
+	ContractURL string `json:"contractUrl"`
+	OpType      string `json:"opType"`
+	Period      string `json:"period"` // "hourly" or "daily"
+	Timestamp   string `json:"timestamp"` // Hour: "2024-01-01T15" or Day: "2024-01-01"
+}
+
+// OperationCounterData represents the counter data stored in KV
+type OperationCounterData struct {
+	Count     uint64    `json:"count"`
+	LastReset time.Time `json:"lastReset"`
+}
+
+// NewOperationCounter creates a new operation counter
+func NewOperationCounter(store state.KV) *OperationCounter {
+	return &OperationCounter{
+		store: store,
+	}
+}
+
+// IncrementOperation increments the counter for a specific contract and operation type
+func (oc *OperationCounter) IncrementOperation(contractURL *url.URL, opType string) error {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	now := time.Now().UTC()
+
+	// Increment hourly counter
+	if err := oc.incrementCounter(contractURL, opType, "hourly", now.Format("2006-01-02T15")); err != nil {
+		return fmt.Errorf("failed to increment hourly counter: %w", err)
+	}
+
+	// Increment daily counter
+	if err := oc.incrementCounter(contractURL, opType, "daily", now.Format("2006-01-02")); err != nil {
+		return fmt.Errorf("failed to increment daily counter: %w", err)
+	}
+
+	return nil
+}
+
+// GetOperationCount returns the current count for a specific contract, operation, and period
+func (oc *OperationCounter) GetOperationCount(contractURL *url.URL, opType string, period string) (uint64, error) {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	now := time.Now().UTC()
+	var timestamp string
+
+	switch period {
+	case "hourly":
+		timestamp = now.Format("2006-01-02T15")
+	case "daily":
+		timestamp = now.Format("2006-01-02")
+	default:
+		return 0, fmt.Errorf("invalid period: %s (must be 'hourly' or 'daily')", period)
+	}
+
+	key := OperationCounterKey{
+		ContractURL: contractURL.String(),
+		OpType:      opType,
+		Period:      period,
+		Timestamp:   timestamp,
+	}
+
+	data, err := oc.getCounterData(key)
+	if err != nil {
+		return 0, err
+	}
+
+	return data.Count, nil
+}
+
+// CheckOperationLimits checks if an operation is within daily/hourly limits
+func (oc *OperationCounter) CheckOperationLimits(contractURL *url.URL, opType string, hourlyLimit, dailyLimit uint64) error {
+	// Check hourly limit
+	if hourlyLimit > 0 {
+		hourlyCount, err := oc.GetOperationCount(contractURL, opType, "hourly")
+		if err != nil {
+			return fmt.Errorf("failed to get hourly count: %w", err)
+		}
+		if hourlyCount >= hourlyLimit {
+			return fmt.Errorf("hourly limit exceeded for %s %s: %d/%d", contractURL, opType, hourlyCount, hourlyLimit)
+		}
+	}
+
+	// Check daily limit
+	if dailyLimit > 0 {
+		dailyCount, err := oc.GetOperationCount(contractURL, opType, "daily")
+		if err != nil {
+			return fmt.Errorf("failed to get daily count: %w", err)
+		}
+		if dailyCount >= dailyLimit {
+			return fmt.Errorf("daily limit exceeded for %s %s: %d/%d", contractURL, opType, dailyCount, dailyLimit)
+		}
+	}
+
+	return nil
+}
+
+// incrementCounter increments a specific counter
+func (oc *OperationCounter) incrementCounter(contractURL *url.URL, opType string, period string, timestamp string) error {
+	key := OperationCounterKey{
+		ContractURL: contractURL.String(),
+		OpType:      opType,
+		Period:      period,
+		Timestamp:   timestamp,
+	}
+
+	data, err := oc.getCounterData(key)
+	if err != nil {
+		return err
+	}
+
+	data.Count++
+	data.LastReset = time.Now().UTC()
+
+	return oc.setCounterData(key, data)
+}
+
+// getCounterData retrieves counter data from KV store
+func (oc *OperationCounter) getCounterData(key OperationCounterKey) (*OperationCounterData, error) {
+	keyBytes, err := json.Marshal(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal counter key: %w", err)
+	}
+
+	storeKey := fmt.Sprintf("/operation-counters/%x", keyBytes)
+	dataBytes, err := oc.store.Get([]byte(storeKey))
+	if err != nil {
+		// Return zero data if key doesn't exist
+		return &OperationCounterData{
+			Count:     0,
+			LastReset: time.Now().UTC(),
+		}, nil
+	}
+
+	if dataBytes == nil {
+		return &OperationCounterData{
+			Count:     0,
+			LastReset: time.Now().UTC(),
+		}, nil
+	}
+
+	var data OperationCounterData
+	if err := json.Unmarshal(dataBytes, &data); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal counter data: %w", err)
+	}
+
+	return &data, nil
+}
+
+// setCounterData stores counter data in KV store
+func (oc *OperationCounter) setCounterData(key OperationCounterKey, data *OperationCounterData) error {
+	keyBytes, err := json.Marshal(key)
+	if err != nil {
+		return fmt.Errorf("failed to marshal counter key: %w", err)
+	}
+
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal counter data: %w", err)
+	}
+
+	storeKey := fmt.Sprintf("/operation-counters/%x", keyBytes)
+	return oc.store.Set([]byte(storeKey), dataBytes)
+}
+
+// CleanupExpiredCounters removes expired counter entries
+func (oc *OperationCounter) CleanupExpiredCounters() error {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	now := time.Now().UTC()
+	cutoffDaily := now.AddDate(0, 0, -7).Format("2006-01-02")   // Keep 7 days
+	cutoffHourly := now.AddDate(0, 0, -2).Format("2006-01-02") // Keep 2 days for hourly
+
+	// Create an iterator for all operation counter keys
+	iter, err := oc.store.Iterator([]byte("/operation-counters/"))
+	if err != nil {
+		return fmt.Errorf("failed to create iterator: %w", err)
+	}
+	defer iter.Close()
+
+	var keysToDelete [][]byte
+	for iter.Valid() {
+		keyBytes := iter.Key()
+
+		// Extract the JSON key from the storage key
+		if len(keyBytes) < len("/operation-counters/") {
+			iter.Next()
+			continue
+		}
+
+		jsonKeyHex := string(keyBytes[len("/operation-counters/"):])
+		jsonKeyBytes := make([]byte, len(jsonKeyHex)/2)
+		if _, err := fmt.Sscanf(jsonKeyHex, "%x", &jsonKeyBytes); err != nil {
+			iter.Next()
+			continue
+		}
+
+		var key OperationCounterKey
+		if err := json.Unmarshal(jsonKeyBytes, &key); err != nil {
+			iter.Next()
+			continue
+		}
+
+		// Check if this counter should be expired
+		shouldDelete := false
+		if key.Period == "daily" && key.Timestamp < cutoffDaily {
+			shouldDelete = true
+		} else if key.Period == "hourly" && key.Timestamp < cutoffHourly {
+			shouldDelete = true
+		}
+
+		if shouldDelete {
+			keysToDelete = append(keysToDelete, append([]byte(nil), keyBytes...))
+		}
+
+		iter.Next()
+	}
+
+	// Delete expired keys
+	for _, key := range keysToDelete {
+		if err := oc.store.Delete(key); err != nil {
+			return fmt.Errorf("failed to delete expired counter key: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// GetStats returns statistics about operation counters
+func (oc *OperationCounter) GetStats() (map[string]interface{}, error) {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	stats := make(map[string]interface{})
+	stats["timestamp"] = time.Now().UTC().Format(time.RFC3339)
+
+	// Count total entries
+	iter, err := oc.store.Iterator([]byte("/operation-counters/"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create iterator: %w", err)
+	}
+	defer iter.Close()
+
+	totalCount := 0
+	contractCounts := make(map[string]int)
+	opTypeCounts := make(map[string]int)
+
+	for iter.Valid() {
+		totalCount++
+
+		keyBytes := iter.Key()
+		if len(keyBytes) >= len("/operation-counters/") {
+			jsonKeyHex := string(keyBytes[len("/operation-counters/"):])
+			jsonKeyBytes := make([]byte, len(jsonKeyHex)/2)
+			if n, err := fmt.Sscanf(jsonKeyHex, "%x", &jsonKeyBytes); err == nil && n > 0 {
+				var key OperationCounterKey
+				if err := json.Unmarshal(jsonKeyBytes, &key); err == nil {
+					contractCounts[key.ContractURL]++
+					opTypeCounts[key.OpType]++
+				}
+			}
+		}
+
+		iter.Next()
+	}
+
+	stats["total_counters"] = totalCount
+	stats["contracts"] = contractCounts
+	stats["operation_types"] = opTypeCounts
+
+	return stats, nil
 }

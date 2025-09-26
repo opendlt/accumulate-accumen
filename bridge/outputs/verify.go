@@ -9,10 +9,15 @@ import (
 	"sync"
 	"time"
 
+	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
+
+	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs/limits"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
+	"github.com/opendlt/accumulate-accumen/internal/accutil"
 	"github.com/opendlt/accumulate-accumen/registry/authority"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 )
 
 // Verifier handles output verification and integrity checks
@@ -780,4 +785,128 @@ func matchesPattern(value, pattern string) bool {
 	}
 
 	return false
+}
+
+// VerifyAuthority verifies that the keyBook is an enabled authority for the target account
+// This checks direct authorities and follows delegation chains as needed
+func VerifyAuthority(ctx context.Context, querier *l0api.Querier, accountURL *url.URL, keyBook *url.URL) error {
+	if querier == nil {
+		return fmt.Errorf("querier cannot be nil")
+	}
+	if accountURL == nil {
+		return fmt.Errorf("account URL cannot be nil")
+	}
+	if keyBook == nil {
+		return fmt.Errorf("keyBook URL cannot be nil")
+	}
+
+	// Query the target account to get its authorities
+	accountRecord, err := querier.QueryAccount(ctx, accountURL)
+	if err != nil {
+		return fmt.Errorf("failed to query account %s: %w", accountURL, err)
+	}
+
+	// Check direct authorities based on account type
+	authorities, err := getAccountAuthorities(accountRecord.Account)
+	if err != nil {
+		return fmt.Errorf("failed to get authorities for account %s: %w", accountURL, err)
+	}
+
+	// Check if keyBook is directly authorized
+	keyBookCanonical := accutil.Canonicalize(keyBook)
+	for _, authURL := range authorities {
+		authCanonical := accutil.Canonicalize(authURL)
+		if authCanonical == keyBookCanonical {
+			return nil // Direct authority found
+		}
+	}
+
+	// Check delegation chain - follow authorities to see if any delegate to our keyBook
+	for _, authURL := range authorities {
+		if err := checkDelegationChain(ctx, querier, authURL, keyBook, 0, 3); err == nil {
+			return nil // Found through delegation chain
+		}
+	}
+
+	return fmt.Errorf("keyBook %s is not an enabled authority for account %s", keyBook, accountURL)
+}
+
+// getAccountAuthorities extracts the authorities list from different account types
+func getAccountAuthorities(account protocol.Account) ([]*url.URL, error) {
+	switch acc := account.(type) {
+	case *protocol.TokenAccount:
+		return acc.Authorities, nil
+	case *protocol.DataAccount:
+		return acc.Authorities, nil
+	case *protocol.LiteTokenAccount:
+		// Lite accounts use the parent identity for authority
+		parentADI, err := accutil.GetADI(acc.Url)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get parent ADI for lite token account: %w", err)
+		}
+		return []*url.URL{parentADI}, nil
+	case *protocol.LiteDataAccount:
+		// Lite accounts use the parent identity for authority
+		parentADI, err := accutil.GetADI(acc.Url)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get parent ADI for lite data account: %w", err)
+		}
+		return []*url.URL{parentADI}, nil
+	case *protocol.Identity:
+		return acc.Authorities, nil
+	default:
+		return nil, fmt.Errorf("unsupported account type: %T", account)
+	}
+}
+
+// checkDelegationChain recursively follows the delegation chain to find the target keyBook
+func checkDelegationChain(ctx context.Context, querier *l0api.Querier, currentURL *url.URL, targetKeyBook *url.URL, depth int, maxDepth int) error {
+	if depth >= maxDepth {
+		return fmt.Errorf("maximum delegation depth reached")
+	}
+
+	// If current URL is the target keyBook, we found it
+	if accutil.Canonicalize(currentURL) == accutil.Canonicalize(targetKeyBook) {
+		return nil
+	}
+
+	// Query the current authority to see if it's a keyBook that delegates to our target
+	currentRecord, err := querier.QueryAccount(ctx, currentURL)
+	if err != nil {
+		return fmt.Errorf("failed to query delegation authority %s: %w", currentURL, err)
+	}
+
+	// If it's a KeyBook, check its authorities/delegations
+	if keyBook, ok := currentRecord.Account.(*protocol.KeyBook); ok {
+		// Check if this keyBook has authorities (delegations)
+		for _, authURL := range keyBook.Authorities {
+			if err := checkDelegationChain(ctx, querier, authURL, targetKeyBook, depth+1, maxDepth); err == nil {
+				return nil // Found through deeper delegation
+			}
+		}
+	}
+
+	return fmt.Errorf("delegation chain does not lead to target keyBook")
+}
+
+// integrateAuthorityVerification integrates authority verification into operation verification
+func integrateAuthorityVerification(ctx context.Context, querier *l0api.Querier, op *runtime.StagedOp, keyBook *url.URL) error {
+	var targetURL *url.URL
+
+	switch op.Type {
+	case "write_data", "writeData":
+		targetURL = op.Account
+	case "send_tokens", "sendTokens":
+		targetURL = op.To // Verify authority for the destination account
+	case "update_auth", "updateAuth":
+		targetURL = op.Account
+	default:
+		return fmt.Errorf("unsupported operation type for authority verification: %s", op.Type)
+	}
+
+	if targetURL == nil {
+		return fmt.Errorf("target URL cannot be nil for operation %s", op.Type)
+	}
+
+	return VerifyAuthority(ctx, querier, targetURL, keyBook)
 }

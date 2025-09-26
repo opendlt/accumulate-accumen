@@ -50,6 +50,7 @@ type ExecResult struct {
 	GasUsed       uint64              `json:"gas_used"`
 	Receipt       *state.Receipt      `json:"receipt"`
 	Error         string              `json:"error,omitempty"`
+	ErrorCode     string              `json:"error_code,omitempty"`
 	ExecutionTime time.Duration       `json:"execution_time"`
 	StateChanges  []state.StateChange `json:"state_changes"`
 	StagedOps     []*runtime.StagedOp `json:"staged_ops"`
@@ -473,7 +474,8 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		// Verify all staged operations with binding permissions
 		if err := outputs.VerifyAllWithBinding(execResult.StagedOps, scope, binding, e.limitTracker); err != nil {
 			result.Success = false
-			result.Error = fmt.Sprintf("authority verification failed: %v", err)
+			result.Error = fmt.Sprintf("AUTHORITY_NOT_PERMITTED: %v", err)
+			result.ErrorCode = "AUTHORITY_NOT_PERMITTED"
 			result.ExecutionTime = time.Since(startTime)
 			return result
 		}
