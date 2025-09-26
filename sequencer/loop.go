@@ -25,12 +25,14 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/registry/dn"
 	"github.com/opendlt/accumulate-accumen/types/json"
+	"github.com/opendlt/accumulate-accumen/types/proto/accumen"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/signing"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+	"google.golang.org/protobuf/proto"
 )
 
 // SnapshotManager handles periodic snapshots and restoration
@@ -631,6 +633,13 @@ func (s *Sequencer) produceBlock(ctx context.Context) {
 		return
 	}
 
+	// Build formal Block object with computed roots
+	formalBlock, err := s.buildFormalBlock(block)
+	if err != nil {
+		fmt.Printf("Failed to build formal block: %v\n", err)
+		return
+	}
+
 	// Remove executed transactions from mempool
 	for _, tx := range block.Transactions {
 		s.mempool.RemoveTransaction(tx.ID)
@@ -644,13 +653,18 @@ func (s *Sequencer) produceBlock(ctx context.Context) {
 	s.txsProcessed += uint64(len(block.Transactions))
 	s.mu.Unlock()
 
+	// Persist block header to KV store
+	if err := s.persistBlockHeader(formalBlock.Header); err != nil {
+		fmt.Printf("Failed to persist block header: %v\n", err)
+	}
+
 	// Write metadata for each successful transaction
 	if s.config.Bridge.EnableBridge {
 		s.writeTransactionMetadata(ctx, block)
 
 		// Check if it's time to write an anchor
 		if s.shouldWriteAnchor(block.Header.Height) {
-			s.writeAnchor(ctx, block)
+			s.writeBlockHeader(ctx, formalBlock.Header)
 		}
 	}
 
@@ -666,8 +680,9 @@ func (s *Sequencer) produceBlock(ctx context.Context) {
 		}
 	}
 
-	fmt.Printf("Produced block %d with %d transactions\n",
-		block.Header.Height, len(block.Transactions))
+	fmt.Printf("Produced block %d with %d transactions (txs_root: %x, results_root: %x, state_root: %x)\n",
+		formalBlock.Header.Height, len(formalBlock.Txs),
+		formalBlock.Header.TxsRoot, formalBlock.Header.ResultsRoot, formalBlock.Header.StateRoot)
 }
 
 // writeTransactionMetadata writes metadata for each successful transaction to DN
@@ -1366,6 +1381,303 @@ func (sl *SubmissionLoop) Stop(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// buildFormalBlock constructs a formal Block object with computed Merkle roots
+func (s *Sequencer) buildFormalBlock(block *Block) (*accumen.Block, error) {
+	// Convert execution results to TxResult protobuf messages
+	var txResults []*accumen.TxResult
+	for i, result := range block.Results {
+		tx := block.Transactions[i]
+
+		// Convert transaction ID to hash bytes
+		txHash := sha256.Sum256([]byte(tx.ID))
+
+		// Build result data (CBOR-encoded result if successful)
+		var resultData []byte
+		var errorMsg string
+		if result.Success {
+			// In a real implementation, this would be CBOR-encoded execution result
+			resultData = []byte(fmt.Sprintf("{\"success\": true, \"return_value\": \"%s\"}", hex.EncodeToString(result.ReturnValue)))
+		} else {
+			errorMsg = result.Error
+			resultData = []byte(fmt.Sprintf("{\"success\": false, \"error\": \"%s\"}", result.Error))
+		}
+
+		txResult := &accumen.TxResult{
+			TxHash:  txHash[:],
+			GasUsed: result.GasUsed,
+			Result:  resultData,
+			Error:   errorMsg,
+		}
+		txResults = append(txResults, txResult)
+	}
+
+	// Sort results by transaction hash for deterministic ordering
+	state.SortTxResults(txResults)
+
+	// Compute Merkle roots
+	txsRoot := state.ComputeTxsRoot(txResults)
+	resultsRoot := state.ComputeResultsRoot(txResults)
+
+	// Derive state root from KV store snapshot
+	stateRoot, err := s.computeStateRoot()
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute state root: %w", err)
+	}
+
+	// Get previous block hash
+	prevHash, err := s.getPreviousBlockHash(block.Header.Height)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get previous block hash: %w", err)
+	}
+
+	// Build formal block header
+	header := &accumen.BlockHeader{
+		Height:      block.Header.Height,
+		PrevHash:    prevHash,
+		TxsRoot:     txsRoot,
+		ResultsRoot: resultsRoot,
+		StateRoot:   stateRoot,
+		Time:        block.Header.Timestamp.UnixNano(),
+	}
+
+	// Build formal block
+	formalBlock := &accumen.Block{
+		Header: header,
+		Txs:    txResults,
+	}
+
+	return formalBlock, nil
+}
+
+// computeStateRoot computes the state root hash from the current KV store
+func (s *Sequencer) computeStateRoot() ([]byte, error) {
+	// Use the snapshot manager's app hash generation for consistency
+	if s.snapshotManager != nil {
+		appHashHex, err := s.snapshotManager.GenerateAppHash()
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert hex string to bytes
+		appHashBytes, err := hex.DecodeString(appHashHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode app hash: %w", err)
+		}
+
+		return appHashBytes, nil
+	}
+
+	// Fallback: compute directly from engine state
+	kvStore := s.engine.GetKVStore()
+	hasher := sha256.New()
+
+	// Iterate over all key-value pairs in sorted order for deterministic hash
+	var keys [][]byte
+	err := kvStore.Iterate(func(key, value []byte) error {
+		keys = append(keys, append([]byte(nil), key...)) // Copy key
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect keys: %w", err)
+	}
+
+	// Sort keys for deterministic hashing
+	sort.Slice(keys, func(i, j int) bool {
+		return string(keys[i]) < string(keys[j])
+	})
+
+	// Hash each key-value pair
+	for _, key := range keys {
+		value, err := kvStore.Get(key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get value for key %s: %w", string(key), err)
+		}
+
+		hasher.Write(key)
+		hasher.Write(value)
+	}
+
+	return hasher.Sum(nil), nil
+}
+
+// getPreviousBlockHash retrieves the hash of the previous block
+func (s *Sequencer) getPreviousBlockHash(currentHeight uint64) ([]byte, error) {
+	if currentHeight == 1 {
+		// Genesis block has no previous hash
+		return make([]byte, 32), nil
+	}
+
+	// Get previous block header from KV store
+	kvStore := s.engine.GetKVStore()
+	prevHeight := currentHeight - 1
+	headerKey := fmt.Sprintf("/block/header/%d", prevHeight)
+
+	headerBytes, err := kvStore.Get([]byte(headerKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get previous block header: %w", err)
+	}
+
+	// Deserialize previous header
+	var prevHeader accumen.BlockHeader
+	if err := proto.Unmarshal(headerBytes, &prevHeader); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal previous block header: %w", err)
+	}
+
+	// Compute hash of previous header
+	prevHeaderBytes, err := proto.Marshal(&prevHeader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal previous header for hashing: %w", err)
+	}
+
+	prevHash := sha256.Sum256(prevHeaderBytes)
+	return prevHash[:], nil
+}
+
+// persistBlockHeader stores the block header in the KV store
+func (s *Sequencer) persistBlockHeader(header *accumen.BlockHeader) error {
+	kvStore := s.engine.GetKVStore()
+
+	// Serialize header
+	headerBytes, err := proto.Marshal(header)
+	if err != nil {
+		return fmt.Errorf("failed to marshal block header: %w", err)
+	}
+
+	// Store under /block/header/<height>
+	headerKey := fmt.Sprintf("/block/header/%d", header.Height)
+	if err := kvStore.Set([]byte(headerKey), headerBytes); err != nil {
+		return fmt.Errorf("failed to store block header: %w", err)
+	}
+
+	return nil
+}
+
+// writeBlockHeader writes a block header to the L0 DN for anchoring
+func (s *Sequencer) writeBlockHeader(ctx context.Context, header *accumen.BlockHeader) {
+	basePath := "acc://accumen.acme"
+
+	// Build block header data for anchoring
+	headerData, err := s.buildBlockHeaderAnchor(header)
+	if err != nil {
+		fmt.Printf("Failed to build block header anchor: %v\n", err)
+		return
+	}
+
+	// Write block header to DN asynchronously
+	go func() {
+		// Use the new DN writer WriteBlockHeader function
+		txid, err := s.dnWriter.WriteBlockHeader(ctx, *header, basePath)
+		if err != nil {
+			fmt.Printf("Failed to write block header for height %d: %v\n", header.Height, err)
+			return
+		}
+
+		// Update last anchor height
+		s.mu.Lock()
+		s.lastAnchorHeight = header.Height
+		s.mu.Unlock()
+
+		fmt.Printf("Block header anchored for height %d: %s\n", header.Height, txid)
+
+		// Subscribe to confirmation if events manager is available
+		if s.eventsManager != nil {
+			statusCh, cancel := s.eventsManager.SubscribeTx(txid)
+
+			// Monitor confirmation status in a separate goroutine
+			go func() {
+				defer cancel()
+
+				// Use a timeout to avoid waiting indefinitely
+				timeout := time.After(60 * time.Second) // Longer timeout for block headers
+
+				for {
+					select {
+					case status := <-statusCh:
+						switch status.Status {
+						case "confirmed":
+							fmt.Printf("Block header anchor for height %d confirmed: %s\n", header.Height, txid)
+							return
+						case "failed":
+							fmt.Printf("Block header anchor for height %d failed: %s (error: %s)\n", header.Height, txid, status.Error)
+							return
+						}
+					case <-timeout:
+						fmt.Printf("Block header anchor for height %d confirmation timeout: %s\n", header.Height, txid)
+						return
+					}
+				}
+			}()
+		}
+	}()
+}
+
+// buildBlockHeaderAnchor constructs the block header anchor data
+func (s *Sequencer) buildBlockHeaderAnchor(header *accumen.BlockHeader) ([]byte, error) {
+	// Calculate header hash
+	headerBytes, err := proto.Marshal(header)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal header: %w", err)
+	}
+	headerHash := sha256.Sum256(headerBytes)
+
+	// Convert timestamp from nanoseconds to time
+	timestamp := time.Unix(0, header.Time).UTC()
+
+	// Build header anchor structure
+	anchor := map[string]interface{}{
+		"version":      "1.0.0",
+		"type":         "accumen_block_header",
+		"blockHeight":  header.Height,
+		"headerHash":   hex.EncodeToString(headerHash[:]),
+		"prevHash":     hex.EncodeToString(header.PrevHash),
+		"txsRoot":      hex.EncodeToString(header.TxsRoot),
+		"resultsRoot":  hex.EncodeToString(header.ResultsRoot),
+		"stateRoot":    hex.EncodeToString(header.StateRoot),
+		"timestamp":    timestamp.Format(time.RFC3339),
+		"crossLink": map[string]interface{}{
+			"l1ChainId":    "accumen-l1",
+			"l1BlockHash":  hex.EncodeToString(headerHash[:]),
+			"l1Height":     header.Height,
+			"followerNote": "L1 block header anchored to L0 for follower verification",
+		},
+	}
+
+	// Convert to JSON
+	jsonData, err := s.metadataBuilder.BuildCustomMetadata(anchor)
+	if err != nil {
+		// Fallback to simple JSON encoding
+		return []byte(fmt.Sprintf(`{
+			"version": "1.0.0",
+			"type": "accumen_block_header",
+			"blockHeight": %d,
+			"headerHash": "%s",
+			"prevHash": "%s",
+			"txsRoot": "%s",
+			"resultsRoot": "%s",
+			"stateRoot": "%s",
+			"timestamp": "%s",
+			"crossLink": {
+				"l1ChainId": "accumen-l1",
+				"l1BlockHash": "%s",
+				"l1Height": %d,
+				"followerNote": "L1 block header anchored to L0 for follower verification"
+			}
+		}`,
+			header.Height,
+			hex.EncodeToString(headerHash[:]),
+			hex.EncodeToString(header.PrevHash),
+			hex.EncodeToString(header.TxsRoot),
+			hex.EncodeToString(header.ResultsRoot),
+			hex.EncodeToString(header.StateRoot),
+			timestamp.Format(time.RFC3339),
+			hex.EncodeToString(headerHash[:]),
+			header.Height,
+		)), nil
+	}
+
+	return jsonData, nil
 }
 
 // creditsManagementLoop runs periodic credits checks and top-ups for the controlling key page

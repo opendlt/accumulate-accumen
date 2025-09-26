@@ -1,8 +1,13 @@
 package state
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"sort"
 	"time"
+
+	"github.com/opendlt/accumulate-accumen/types/proto/accumen"
+	"google.golang.org/protobuf/proto"
 )
 
 // Receipt represents an execution receipt for WASM contract execution
@@ -222,4 +227,215 @@ func (r *Receipt) Clone() *Receipt {
 	copy(clone.Logs, r.Logs)
 
 	return clone
+}
+
+// HashTxResult computes the SHA256 hash of a transaction result
+func HashTxResult(result *accumen.TxResult) []byte {
+	// Serialize the TxResult using protobuf
+	data, err := proto.Marshal(result)
+	if err != nil {
+		// Should never happen with valid protobuf messages
+		panic("failed to marshal TxResult: " + err.Error())
+	}
+
+	// Return SHA256 hash
+	hash := sha256.Sum256(data)
+	return hash[:]
+}
+
+// MerkleRoot computes the Merkle root of a list of hashes
+// Uses a binary tree structure with SHA256 for internal nodes
+func MerkleRoot(hashes [][]byte) []byte {
+	if len(hashes) == 0 {
+		// Empty tree has zero hash
+		return make([]byte, 32)
+	}
+
+	if len(hashes) == 1 {
+		return hashes[0]
+	}
+
+	// Create a copy to avoid mutating the input
+	nodes := make([][]byte, len(hashes))
+	copy(nodes, hashes)
+
+	// Build tree bottom-up
+	for len(nodes) > 1 {
+		var nextLevel [][]byte
+
+		// Process pairs of nodes
+		for i := 0; i < len(nodes); i += 2 {
+			if i+1 < len(nodes) {
+				// Hash pair of nodes
+				left := nodes[i]
+				right := nodes[i+1]
+				combined := append(left, right...)
+				hash := sha256.Sum256(combined)
+				nextLevel = append(nextLevel, hash[:])
+			} else {
+				// Odd number of nodes - promote the last one
+				nextLevel = append(nextLevel, nodes[i])
+			}
+		}
+
+		nodes = nextLevel
+	}
+
+	return nodes[0]
+}
+
+// ComputeTxsRoot computes the Merkle root of transaction hashes
+func ComputeTxsRoot(results []*accumen.TxResult) []byte {
+	if len(results) == 0 {
+		return make([]byte, 32)
+	}
+
+	var hashes [][]byte
+	for _, result := range results {
+		hashes = append(hashes, result.TxHash)
+	}
+
+	return MerkleRoot(hashes)
+}
+
+// ComputeResultsRoot computes the Merkle root of transaction result hashes
+func ComputeResultsRoot(results []*accumen.TxResult) []byte {
+	if len(results) == 0 {
+		return make([]byte, 32)
+	}
+
+	var hashes [][]byte
+	for _, result := range results {
+		hashes = append(hashes, HashTxResult(result))
+	}
+
+	return MerkleRoot(hashes)
+}
+
+// VerifyTxInclusion verifies that a transaction is included in a block
+// Returns the Merkle proof path and verification result
+func VerifyTxInclusion(txHash []byte, txsRoot []byte, allTxHashes [][]byte) ([][]byte, bool) {
+	// Find the index of the transaction
+	txIndex := -1
+	for i, hash := range allTxHashes {
+		if len(hash) == len(txHash) {
+			match := true
+			for j := range hash {
+				if hash[j] != txHash[j] {
+					match = false
+					break
+				}
+			}
+			if match {
+				txIndex = i
+				break
+			}
+		}
+	}
+
+	if txIndex == -1 {
+		return nil, false
+	}
+
+	// Generate Merkle proof
+	proof := generateMerkleProof(allTxHashes, txIndex)
+
+	// Verify the proof
+	computedRoot := verifyMerkleProof(txHash, proof, txIndex)
+
+	// Check if computed root matches expected root
+	if len(computedRoot) != len(txsRoot) {
+		return proof, false
+	}
+
+	for i := range computedRoot {
+		if computedRoot[i] != txsRoot[i] {
+			return proof, false
+		}
+	}
+
+	return proof, true
+}
+
+// generateMerkleProof generates a Merkle proof for a transaction at given index
+func generateMerkleProof(hashes [][]byte, index int) [][]byte {
+	if len(hashes) <= 1 {
+		return nil
+	}
+
+	var proof [][]byte
+	nodes := make([][]byte, len(hashes))
+	copy(nodes, hashes)
+	currentIndex := index
+
+	// Build proof by collecting sibling nodes at each level
+	for len(nodes) > 1 {
+		var nextLevel [][]byte
+		nextIndex := currentIndex / 2
+
+		for i := 0; i < len(nodes); i += 2 {
+			if i+1 < len(nodes) {
+				left := nodes[i]
+				right := nodes[i+1]
+
+				// Add sibling to proof if current node is part of the path
+				if i == currentIndex || i+1 == currentIndex {
+					if i == currentIndex {
+						proof = append(proof, right)
+					} else {
+						proof = append(proof, left)
+					}
+				}
+
+				// Compute parent hash
+				combined := append(left, right...)
+				hash := sha256.Sum256(combined)
+				nextLevel = append(nextLevel, hash[:])
+			} else {
+				// Odd number of nodes
+				nextLevel = append(nextLevel, nodes[i])
+			}
+		}
+
+		nodes = nextLevel
+		currentIndex = nextIndex
+	}
+
+	return proof
+}
+
+// verifyMerkleProof verifies a Merkle proof and returns the computed root
+func verifyMerkleProof(leafHash []byte, proof [][]byte, index int) []byte {
+	currentHash := leafHash
+	currentIndex := index
+
+	for _, sibling := range proof {
+		if currentIndex%2 == 0 {
+			// Current node is left child
+			combined := append(currentHash, sibling...)
+			hash := sha256.Sum256(combined)
+			currentHash = hash[:]
+		} else {
+			// Current node is right child
+			combined := append(sibling, currentHash...)
+			hash := sha256.Sum256(combined)
+			currentHash = hash[:]
+		}
+		currentIndex = currentIndex / 2
+	}
+
+	return currentHash
+}
+
+// SortTxResults sorts transaction results by transaction hash for deterministic ordering
+func SortTxResults(results []*accumen.TxResult) {
+	sort.Slice(results, func(i, j int) bool {
+		a, b := results[i].TxHash, results[j].TxHash
+		for k := 0; k < len(a) && k < len(b); k++ {
+			if a[k] != b[k] {
+				return a[k] < b[k]
+			}
+		}
+		return len(a) < len(b)
+	})
 }

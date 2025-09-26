@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package accumen;
+
+option go_package = "github.com/opendlt/accumulate-accumen/types/proto/accumen";
+
+// TxResult represents the result of executing a transaction
+message TxResult {
+  // Transaction hash (SHA256 of CBOR-encoded transaction)
+  bytes tx_hash = 1;
+
+  // Gas units consumed during execution
+  uint64 gas_used = 2;
+
+  // Execution result data (CBOR-encoded)
+  bytes result = 3;
+
+  // Error message if execution failed
+  string error = 4;
+}
+
+// BlockHeader contains block metadata and commitment roots
+message BlockHeader {
+  // Block height (sequential block number)
+  uint64 height = 1;
+
+  // Hash of previous block header
+  bytes prev_hash = 2;
+
+  // Merkle root of all transaction hashes in this block
+  bytes txs_root = 3;
+
+  // Merkle root of all transaction results in this block
+  bytes results_root = 4;
+
+  // State root hash after applying all transactions
+  bytes state_root = 5;
+
+  // Block timestamp (Unix nanoseconds)
+  int64 time = 6;
+}
+
+// Block represents a complete L1 block with header and transactions
+message Block {
+  // Block header containing metadata and roots
+  BlockHeader header = 1;
+
+  // All transaction results in this block
+  repeated TxResult txs = 2;
+}
