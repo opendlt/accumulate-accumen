@@ -1935,3 +1935,264 @@ Common log patterns to watch for:
 - `ERROR.*execution.*timeout` - Execution timeouts
 - `ERROR.*bridge.*failed` - Bridge connectivity issues
 - `WARN.*gas.*limit` - Gas limit warnings
+
+## Production JSON-RPC Configuration
+
+The Accumen JSON-RPC server includes comprehensive production features including authentication, rate limiting, CORS, TLS, and standardized error handling.
+
+### Server Configuration
+
+Configure the server section in your `config.yaml`:
+
+```yaml
+server:
+  addr: ":8666"                    # Server bind address
+  tls:
+    cert: "/path/to/server.crt"     # TLS certificate file
+    key: "/path/to/server.key"      # TLS private key file
+  apiKeys:                          # API key allowlist
+    - "prod-key-1234567890abcdef"
+    - "staging-key-abcdef1234567890"
+  cors:
+    origins:                        # Allowed CORS origins
+      - "https://app.example.com"
+      - "https://dashboard.example.com"
+  rate:
+    rps: 100                        # Requests per second per IP
+    burst: 200                      # Burst capacity per IP
+```
+
+### Authentication & Authorization
+
+#### API Key Authentication
+
+API keys are validated via the `X-API-Key` header:
+
+```bash
+curl -X POST https://api.example.com/rpc \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: prod-key-1234567890abcdef" \
+  -d '{
+    "id": 1,
+    "method": "accumen.status",
+    "params": {}
+  }'
+```
+
+**Features:**
+- Configurable allowlist of API keys
+- Health endpoint (`/health`) bypasses API key checks
+- Graceful handling when no API keys are configured (development mode)
+
+#### Error Responses
+
+Authentication failures return standardized error codes:
+
+```json
+{
+  "error": {
+    "code": -32401,
+    "message": "Unauthorized: Missing X-API-Key header"
+  }
+}
+```
+
+### Rate Limiting
+
+Per-IP token bucket rate limiting protects against abuse:
+
+**Configuration:**
+- `rps`: Sustained requests per second (default: 100)
+- `burst`: Burst capacity for traffic spikes (default: 200)
+
+**Rate Limit Response:**
+```json
+{
+  "error": {
+    "code": -32429,
+    "message": "Rate limit exceeded"
+  }
+}
+```
+
+**Headers:**
+- `Retry-After: 60` - Indicates retry delay in seconds
+
+### CORS (Cross-Origin Resource Sharing)
+
+Configure allowed origins for browser-based applications:
+
+```yaml
+server:
+  cors:
+    origins:
+      - "https://app.example.com"
+      - "https://dashboard.example.com"
+      - "*"  # Allow all origins (not recommended for production)
+```
+
+**Headers Set:**
+- `Access-Control-Allow-Origin`
+- `Access-Control-Allow-Methods: POST, GET, OPTIONS`
+- `Access-Control-Allow-Headers: Content-Type, X-API-Key, Authorization`
+- `Access-Control-Max-Age: 86400`
+
+### TLS/HTTPS Configuration
+
+Enable TLS for production deployments:
+
+#### Certificate Setup
+
+```bash
+# Generate self-signed certificate (development only)
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes
+
+# Production: Use certificates from CA (Let's Encrypt, etc.)
+certbot certonly --standalone -d api.example.com
+```
+
+#### Configuration
+
+```yaml
+server:
+  addr: ":8443"  # Standard HTTPS port
+  tls:
+    cert: "/etc/ssl/certs/api.example.com.crt"
+    key: "/etc/ssl/private/api.example.com.key"
+```
+
+#### HTTPS Client Usage
+
+```bash
+curl -X POST https://api.example.com:8443/rpc \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{"id":1,"method":"accumen.status","params":{}}'
+```
+
+### Standardized Error Codes
+
+The JSON-RPC server uses standardized error codes for consistent client handling:
+
+#### Standard JSON-RPC Errors
+- `-32700`: Parse error (invalid JSON)
+- `-32600`: Invalid Request object
+- `-32601`: Method not found
+- `-32602`: Invalid method parameters
+- `-32603`: Internal JSON-RPC error
+
+#### Authentication Errors
+- `-32401`: Unauthorized (invalid API key)
+- `-32403`: Forbidden (insufficient permissions)
+- `-32429`: Rate limit exceeded
+
+#### Accumen-Specific Errors
+- `-33001`: Authority not permitted (L0 validation failed)
+- `-33002`: Contract paused/inactive
+- `-33003`: Determinism violation (WASM audit failed)
+- `-33004`: Insufficient L0 credits
+- `-33005`: Contract not found
+- `-33006`: Invalid contract address format
+- `-33007`: Transaction execution failed
+- `-33008`: Gas limit exceeded
+- `-33009`: Invalid or replay nonce
+- `-33010`: Mempool full
+- `-33011`: Transaction validation failed
+- `-33012`: State operation failed
+- `-33013`: Contract version not found
+- `-33014`: Contract migration failed
+- `-33015`: Contract upgrade not permitted
+- `-33016`: Namespace reserved
+- `-33017`: Service temporarily unavailable
+
+### Security Headers
+
+All responses include security headers:
+
+```
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 1; mode=block
+Referrer-Policy: strict-origin-when-cross-origin
+Content-Security-Policy: default-src 'none'; script-src 'none'; object-src 'none'
+```
+
+### Health Endpoint
+
+The `/health` endpoint provides service health status:
+
+```bash
+curl http://localhost:8666/health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "version": "v1.0.0"
+}
+```
+
+**Features:**
+- Bypasses API key authentication
+- Bypasses rate limiting
+- Returns 200 OK when service is healthy
+
+### Production Deployment Checklist
+
+#### Security
+- [ ] Configure TLS with valid certificates
+- [ ] Set up API key authentication
+- [ ] Configure CORS origins (avoid wildcard `*`)
+- [ ] Enable rate limiting appropriate for your load
+- [ ] Use HTTPS-only in production
+
+#### Monitoring
+- [ ] Monitor rate limit violations
+- [ ] Track authentication failures
+- [ ] Set up alerting for high error rates
+- [ ] Monitor TLS certificate expiration
+
+#### Configuration
+- [ ] Use environment-specific config files
+- [ ] Secure API key storage (env vars, secrets management)
+- [ ] Configure appropriate timeout values
+- [ ] Set proper log levels for production
+
+#### Load Balancing
+```yaml
+server:
+  rate:
+    rps: 50    # Per instance (total = instances × rps)
+    burst: 100
+```
+
+When load balancing, configure per-instance limits based on your total capacity.
+
+### Example Production Configuration
+
+```yaml
+# production.yaml
+server:
+  addr: ":8443"
+  tls:
+    cert: "/etc/ssl/certs/api.example.com.crt"
+    key: "/etc/ssl/private/api.example.com.key"
+  apiKeys:
+    - "${API_KEY_1}"
+    - "${API_KEY_2}"
+  cors:
+    origins:
+      - "https://app.example.com"
+      - "https://dashboard.example.com"
+  rate:
+    rps: 200
+    burst: 400
+
+# Environment variables
+export API_KEY_1="prod-key-1234567890abcdef"
+export API_KEY_2="staging-key-abcdef1234567890"
+```
+
+This configuration provides enterprise-grade security and reliability for production Accumen deployments.
