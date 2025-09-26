@@ -21,6 +21,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
+	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/keystore"
@@ -53,6 +54,7 @@ func main() {
 		simulateCommand(),
 		scopeCommand(),
 		auditWasmCommand(),
+		snapshotCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -1228,6 +1230,215 @@ func auditWasmCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&wasmPath, "wasm", "", "Path to WASM file to audit (required)")
 	cmd.MarkFlagRequired("wasm")
+
+	return cmd
+}
+
+// snapshotCommand creates the snapshot management command with subcommands
+func snapshotCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "snapshot",
+		Short: "Manage state snapshots",
+		Long:  "Commands for creating, importing, exporting, and listing state snapshots",
+	}
+
+	cmd.AddCommand(
+		snapshotExportCommand(),
+		snapshotImportCommand(),
+		snapshotListCommand(),
+	)
+
+	return cmd
+}
+
+// snapshotExportCommand creates the snapshot export subcommand
+func snapshotExportCommand() *cobra.Command {
+	var outputFile string
+	var dataDir string
+
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export current state to a snapshot file",
+		Long:  "Creates a snapshot of the current state and saves it to the specified file",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if outputFile == "" {
+				return fmt.Errorf("--out is required")
+			}
+
+			// Default data directory
+			if dataDir == "" {
+				dataDir = "data/l1"
+			}
+
+			// Load KV store (assuming Badger for persistence)
+			kvStore, err := state.NewBadgerStore(dataDir)
+			if err != nil {
+				return fmt.Errorf("failed to open KV store: %v", err)
+			}
+			defer kvStore.Close()
+
+			// Create snapshot metadata
+			meta := &state.SnapshotMeta{
+				Height:  0, // Will be determined from state if available
+				Time:    time.Now(),
+				AppHash: "manual-export",
+			}
+
+			// Write snapshot
+			if err := state.WriteSnapshot(outputFile, kvStore, meta); err != nil {
+				return fmt.Errorf("failed to write snapshot: %v", err)
+			}
+
+			// Report success
+			result := map[string]interface{}{
+				"output_file": outputFile,
+				"height":      meta.Height,
+				"num_keys":    meta.NumKeys,
+				"time":        meta.Time.Format(time.RFC3339),
+			}
+
+			prettyPrint(result)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputFile, "out", "", "Output snapshot file path (required)")
+	cmd.Flags().StringVar(&dataDir, "data-dir", "data/l1", "Data directory path")
+	cmd.MarkFlagRequired("out")
+
+	return cmd
+}
+
+// snapshotImportCommand creates the snapshot import subcommand
+func snapshotImportCommand() *cobra.Command {
+	var inputFile string
+	var dataDir string
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "import",
+		Short: "Import state from a snapshot file",
+		Long:  "Restores state from a snapshot file. WARNING: This will overwrite existing state!",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if inputFile == "" {
+				return fmt.Errorf("--in is required")
+			}
+
+			// Default data directory
+			if dataDir == "" {
+				dataDir = "data/l1"
+			}
+
+			// Safety check - ensure node is stopped
+			if !force {
+				fmt.Println("WARNING: Importing a snapshot will completely replace the current state.")
+				fmt.Println("Please ensure the Accumen node is stopped before proceeding.")
+				fmt.Print("Continue? (y/N): ")
+
+				var response string
+				fmt.Scanln(&response)
+				if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
+					fmt.Println("Import cancelled.")
+					return nil
+				}
+			}
+
+			// Load KV store
+			kvStore, err := state.NewBadgerStore(dataDir)
+			if err != nil {
+				return fmt.Errorf("failed to open KV store: %v", err)
+			}
+			defer kvStore.Close()
+
+			// Restore from snapshot
+			if err := state.RestoreFromSnapshot(inputFile, kvStore); err != nil {
+				return fmt.Errorf("failed to restore from snapshot: %v", err)
+			}
+
+			// Get metadata for reporting
+			meta, err := state.GetSnapshotMeta(inputFile)
+			if err != nil {
+				return fmt.Errorf("failed to read snapshot metadata: %v", err)
+			}
+
+			// Report success
+			result := map[string]interface{}{
+				"input_file": inputFile,
+				"height":     meta.Height,
+				"num_keys":   meta.NumKeys,
+				"time":       meta.Time.Format(time.RFC3339),
+				"app_hash":   meta.AppHash,
+			}
+
+			prettyPrint(result)
+			fmt.Println("State import completed successfully.")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&inputFile, "in", "", "Input snapshot file path (required)")
+	cmd.Flags().StringVar(&dataDir, "data-dir", "data/l1", "Data directory path")
+	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	cmd.MarkFlagRequired("in")
+
+	return cmd
+}
+
+// snapshotListCommand creates the snapshot list subcommand
+func snapshotListCommand() *cobra.Command {
+	var snapshotDir string
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List available snapshots",
+		Long:  "Shows all available snapshot files with their metadata",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Default snapshot directory
+			if snapshotDir == "" {
+				snapshotDir = "data/l1/snapshots"
+			}
+
+			// List snapshots
+			snapshots, err := state.ListSnapshots(snapshotDir)
+			if err != nil {
+				return fmt.Errorf("failed to list snapshots: %v", err)
+			}
+
+			if len(snapshots) == 0 {
+				fmt.Printf("No snapshots found in %s\n", snapshotDir)
+				return nil
+			}
+
+			// Prepare results
+			result := map[string]interface{}{
+				"snapshot_dir": snapshotDir,
+				"count":        len(snapshots),
+				"snapshots":    make([]map[string]interface{}, 0, len(snapshots)),
+			}
+
+			for _, snapshot := range snapshots {
+				snapshotData := map[string]interface{}{
+					"filename":  snapshot.Filename,
+					"size":      snapshot.Size,
+					"mod_time":  snapshot.ModTime.Format(time.RFC3339),
+				}
+
+				if snapshot.Meta != nil {
+					snapshotData["height"] = snapshot.Meta.Height
+					snapshotData["num_keys"] = snapshot.Meta.NumKeys
+					snapshotData["time"] = snapshot.Meta.Time.Format(time.RFC3339)
+					snapshotData["app_hash"] = snapshot.Meta.AppHash
+				}
+
+				result["snapshots"] = append(result["snapshots"].([]map[string]interface{}), snapshotData)
+			}
+
+			prettyPrint(result)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&snapshotDir, "snapshot-dir", "data/l1/snapshots", "Snapshot directory path")
 
 	return cmd
 }
