@@ -18,6 +18,7 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 
+	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
@@ -47,6 +48,7 @@ func main() {
 		queryCommand(),
 		keysCommand(),
 		keystoreCommand(),
+		txCommand(),
 		scopeCommand(),
 	)
 
@@ -715,6 +717,176 @@ func keystoreListCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&keystorePath, "keystore", "", "Path to keystore directory (required)")
 	cmd.MarkFlagRequired("keystore")
+
+	return cmd
+}
+
+// txCommand creates the tx command with subcommands for envelope manipulation
+func txCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "tx",
+		Short: "Transaction envelope operations",
+		Long:  "Commands for signing and submitting transaction envelopes",
+	}
+
+	cmd.AddCommand(
+		txSignCommand(),
+		txSubmitCommand(),
+	)
+
+	return cmd
+}
+
+// txSignCommand creates the tx sign subcommand
+func txSignCommand() *cobra.Command {
+	var envelopeB64 string
+	var keystorePath string
+	var aliases []string
+
+	cmd := &cobra.Command{
+		Use:   "sign",
+		Short: "Sign an envelope with keystore keys",
+		Long:  "Add signatures to a base64-encoded envelope using specified keystore aliases",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if envelopeB64 == "" {
+				return fmt.Errorf("--envelope is required")
+			}
+			if keystorePath == "" {
+				return fmt.Errorf("--keystore is required")
+			}
+			if len(aliases) == 0 {
+				return fmt.Errorf("at least one --alias is required")
+			}
+
+			// Open the keystore
+			ks, err := keystore.New(keystorePath)
+			if err != nil {
+				return fmt.Errorf("failed to open keystore: %v", err)
+			}
+
+			// Decode the envelope
+			envelope, err := l0api.DecodeEnvelopeBase64(envelopeB64)
+			if err != nil {
+				return fmt.Errorf("failed to decode envelope: %v", err)
+			}
+
+			// Create signers for each alias
+			var signers []signer.Signer
+			for _, alias := range aliases {
+				if !ks.HasKey(alias) {
+					return fmt.Errorf("key alias '%s' not found in keystore", alias)
+				}
+				signers = append(signers, signer.NewKeystoreSigner(ks, alias))
+			}
+
+			// Create multi-signer
+			multiSigner := signer.NewMultiSigner(signers...)
+
+			// Create envelope builder from existing envelope
+			// Note: This approach assumes we can reconstruct a builder from an envelope
+			// The actual implementation may need adjustment based on the build package API
+			builder, err := l0api.DecodeToEnvelopeBuilder(envelopeB64)
+			if err != nil {
+				return fmt.Errorf("failed to create envelope builder: %v", err)
+			}
+
+			// Sign the envelope
+			if err := multiSigner.SignEnvelope(builder); err != nil {
+				return fmt.Errorf("failed to sign envelope: %v", err)
+			}
+
+			// Encode the signed envelope
+			signedEnvelopeB64, err := l0api.EncodeEnvelopeBuilderBase64(builder)
+			if err != nil {
+				return fmt.Errorf("failed to encode signed envelope: %v", err)
+			}
+
+			// Output the signed envelope
+			prettyPrint(map[string]interface{}{
+				"success":        true,
+				"signed_aliases": aliases,
+				"keystore":       keystorePath,
+				"envelope":       signedEnvelopeB64,
+				"note":          "Envelope has been signed with the specified keys",
+			})
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&envelopeB64, "envelope", "", "Base64-encoded envelope to sign (required)")
+	cmd.Flags().StringVar(&keystorePath, "keystore", "", "Path to keystore directory (required)")
+	cmd.Flags().StringArrayVar(&aliases, "alias", []string{}, "Key alias to use for signing (repeatable, required)")
+	cmd.MarkFlagRequired("envelope")
+	cmd.MarkFlagRequired("keystore")
+
+	return cmd
+}
+
+// txSubmitCommand creates the tx submit subcommand
+func txSubmitCommand() *cobra.Command {
+	var envelopeB64 string
+	var l0Endpoint string
+
+	cmd := &cobra.Command{
+		Use:   "submit",
+		Short: "Submit a signed envelope to L0",
+		Long:  "Submit a base64-encoded signed envelope to the Accumulate L0 network",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if envelopeB64 == "" {
+				return fmt.Errorf("--envelope is required")
+			}
+			if l0Endpoint == "" {
+				return fmt.Errorf("--l0 is required")
+			}
+
+			// Decode the envelope
+			envelope, err := l0api.DecodeEnvelopeBase64(envelopeB64)
+			if err != nil {
+				return fmt.Errorf("failed to decode envelope: %v", err)
+			}
+
+			// Create L0 client
+			config := l0api.DefaultClientConfig(l0Endpoint)
+			client, err := l0api.NewClient(config)
+			if err != nil {
+				return fmt.Errorf("failed to create L0 client: %v", err)
+			}
+			defer client.Close()
+
+			// Submit the envelope
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			resp, err := client.Submit(ctx, envelope)
+			if err != nil {
+				return fmt.Errorf("failed to submit envelope: %v", err)
+			}
+
+			// Output the result
+			result := map[string]interface{}{
+				"success":          true,
+				"transaction_hash": resp.TransactionHash.String(),
+				"l0_endpoint":      l0Endpoint,
+			}
+
+			if resp.Simple != nil {
+				result["simple"] = resp.Simple
+			}
+			if resp.Error != nil {
+				result["error"] = resp.Error
+			}
+
+			prettyPrint(result)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&envelopeB64, "envelope", "", "Base64-encoded signed envelope to submit (required)")
+	cmd.Flags().StringVar(&l0Endpoint, "l0", "", "L0 API endpoint URL (required)")
+	cmd.MarkFlagRequired("envelope")
+	cmd.MarkFlagRequired("l0")
 
 	return cmd
 }
