@@ -31,6 +31,7 @@ import (
 var (
 	role       = flag.String("role", "sequencer", "Node role: sequencer or follower")
 	configPath = flag.String("config", "", "Path to configuration file")
+	network    = flag.String("network", "", "Network profile: mainnet, testnet, devnet, or local (overrides config and env)")
 	logLevel   = flag.String("log-level", "info", "Log level: debug, info, warn, error")
 	rpcAddr    = flag.String("rpc", ":8666", "RPC server address (default :8666)")
 	metricsAddr = flag.String("metrics", ":8667", "Metrics server address (default :8667)")
@@ -56,8 +57,8 @@ func main() {
 		logz.Fatal("--role must be either 'sequencer' or 'follower'")
 	}
 
-	// Load configuration
-	cfg, err := config.Load(*configPath)
+	// Load configuration with network profile support
+	cfg, err := config.LoadWithNetwork(*configPath, *network)
 	if err != nil {
 		logz.Fatal("Failed to load config: %v", err)
 	}
@@ -67,6 +68,7 @@ func main() {
 	logz.Info("Metrics initialized for %s mode", *role)
 
 	logz.Info("Starting Accumen node in %s mode with config: %s", *role, *configPath)
+	logz.Info("Using network profile: %s", cfg.EffectiveNetwork())
 	logz.Debug("Configuration: %s", cfg.String())
 
 	// Start metrics server

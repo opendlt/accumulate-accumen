@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -59,11 +61,21 @@ type Config struct {
 		ReconnectMax string `yaml:"reconnectMax"` // maximum reconnect delay (e.g., "60s")
 		Enable       bool   `yaml:"enable"`       // enable event monitoring for confirmations
 	} `yaml:"events"`
-	SequencerKey string `yaml:"sequencerKey"` // DEPRECATED: hex or base64, use Signer instead
+	Profiles struct {
+		Name string `yaml:"name"` // "mainnet"|"testnet"|"devnet"|"local"
+		Path string `yaml:"path"` // optional explicit file path
+	} `yaml:"profiles"`
+	SequencerKey string `yaml:"sequencerKey"`       // DEPRECATED: hex or base64, use Signer instead
+	networkName  string // internal field to track the effective network
 }
 
 // Load reads and parses a YAML configuration file
 func Load(path string) (*Config, error) {
+	return LoadWithNetwork(path, "")
+}
+
+// LoadWithNetwork reads and parses a YAML configuration file with network profile support
+func LoadWithNetwork(path, networkOverride string) (*Config, error) {
 	if path == "" {
 		return nil, fmt.Errorf("config path cannot be empty")
 	}
@@ -78,6 +90,17 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 	}
 
+	// Determine effective network
+	effectiveNetwork := determineNetwork(networkOverride, &config)
+	config.networkName = effectiveNetwork
+
+	// Load and merge network profile if not "local"
+	if effectiveNetwork != "local" {
+		if err := config.loadNetworkProfile(effectiveNetwork, path); err != nil {
+			return nil, fmt.Errorf("failed to load network profile: %w", err)
+		}
+	}
+
 	// Set defaults and validate
 	if err := config.setDefaults(); err != nil {
 		return nil, fmt.Errorf("failed to set config defaults: %w", err)
@@ -88,6 +111,128 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// determineNetwork determines the effective network name using priority:
+// 1. networkOverride (CLI flag)
+// 2. ACCUMEN_NETWORK environment variable
+// 3. config.Profiles.Name
+// 4. default "local"
+func determineNetwork(networkOverride string, config *Config) string {
+	if networkOverride != "" {
+		return networkOverride
+	}
+
+	if envNetwork := os.Getenv("ACCUMEN_NETWORK"); envNetwork != "" {
+		return envNetwork
+	}
+
+	if config.Profiles.Name != "" {
+		return config.Profiles.Name
+	}
+
+	return "local"
+}
+
+// loadNetworkProfile loads and merges a network profile into the base configuration
+func (c *Config) loadNetworkProfile(networkName, baseConfigPath string) error {
+	var profilePath string
+
+	// Use explicit profile path if provided
+	if c.Profiles.Path != "" {
+		profilePath = c.Profiles.Path
+	} else {
+		// Determine profile path relative to config directory
+		configDir := filepath.Dir(baseConfigPath)
+		profilePath = filepath.Join(configDir, "networks", networkName+".yaml")
+	}
+
+	// Check if profile file exists
+	if _, err := os.Stat(profilePath); os.IsNotExist(err) {
+		return fmt.Errorf("network profile file not found: %s", profilePath)
+	}
+
+	// Load profile configuration
+	profileData, err := os.ReadFile(profilePath)
+	if err != nil {
+		return fmt.Errorf("failed to read network profile %s: %w", profilePath, err)
+	}
+
+	var profileConfig Config
+	if err := yaml.Unmarshal(profileData, &profileConfig); err != nil {
+		return fmt.Errorf("failed to parse network profile %s: %w", profilePath, err)
+	}
+
+	// Merge profile into base config (base config wins on conflicts if explicitly set)
+	c.mergeProfile(&profileConfig)
+
+	return nil
+}
+
+// mergeProfile merges profile settings into the base config
+// Base config values take precedence if they are explicitly set (non-zero/non-empty)
+func (c *Config) mergeProfile(profile *Config) {
+	// Merge L0 configuration
+	if c.L0.Source == "" && profile.L0.Source != "" {
+		c.L0.Source = profile.L0.Source
+	}
+	if c.L0.Proxy == "" && profile.L0.Proxy != "" {
+		c.L0.Proxy = profile.L0.Proxy
+	}
+	if len(c.L0.Static) == 0 && len(profile.L0.Static) > 0 {
+		c.L0.Static = profile.L0.Static
+	}
+	if c.L0.WSPath == "" && profile.L0.WSPath != "" {
+		c.L0.WSPath = profile.L0.WSPath
+	}
+
+	// Merge legacy API endpoints
+	if len(c.APIV3Endpoints) == 0 && len(profile.APIV3Endpoints) > 0 {
+		c.APIV3Endpoints = profile.APIV3Endpoints
+	}
+
+	// Merge timing configurations
+	if c.BlockTime == "" && profile.BlockTime != "" {
+		c.BlockTime = profile.BlockTime
+	}
+	if c.AnchorEvery == "" && profile.AnchorEvery != "" {
+		c.AnchorEvery = profile.AnchorEvery
+	}
+	if c.AnchorEveryN == 0 && profile.AnchorEveryN != 0 {
+		c.AnchorEveryN = profile.AnchorEveryN
+	}
+
+	// Merge DN paths
+	if c.DNPaths.Anchors == "" && profile.DNPaths.Anchors != "" {
+		c.DNPaths.Anchors = profile.DNPaths.Anchors
+	}
+	if c.DNPaths.TxMeta == "" && profile.DNPaths.TxMeta != "" {
+		c.DNPaths.TxMeta = profile.DNPaths.TxMeta
+	}
+
+	// Merge confirmation settings
+	if !c.Confirm.WaitForExecution && profile.Confirm.WaitForExecution {
+		c.Confirm.WaitForExecution = profile.Confirm.WaitForExecution
+	}
+	if c.Confirm.Timeout == "" && profile.Confirm.Timeout != "" {
+		c.Confirm.Timeout = profile.Confirm.Timeout
+	}
+
+	// Merge events settings
+	if c.Events.ReconnectMin == "" && profile.Events.ReconnectMin != "" {
+		c.Events.ReconnectMin = profile.Events.ReconnectMin
+	}
+	if c.Events.ReconnectMax == "" && profile.Events.ReconnectMax != "" {
+		c.Events.ReconnectMax = profile.Events.ReconnectMax
+	}
+	if !c.Events.Enable && profile.Events.Enable {
+		c.Events.Enable = profile.Events.Enable
+	}
+}
+
+// EffectiveNetwork returns the name of the effective network profile being used
+func (c *Config) EffectiveNetwork() string {
+	return c.networkName
 }
 
 // setDefaults sets default values for empty fields

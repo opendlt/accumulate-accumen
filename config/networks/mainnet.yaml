@@ -1,0 +1,82 @@
+# Accumulate Mainnet Configuration Profile
+# This profile configures Accumen to connect to the Accumulate mainnet
+# Use with: --network=mainnet or ACCUMEN_NETWORK=mainnet
+
+l0:
+  source: static
+  static:
+    endpoints:
+      - https://mainnet.accumulatenetwork.io/v3
+      - https://api.accumulate.defidevs.io/v3
+      - https://accumulate-api.figment.io/v3
+  wsPath: /ws
+
+# Confirmation settings for mainnet (more conservative)
+confirm:
+  waitForExecution: true
+  timeout: "60s"
+
+# Bridge configuration for mainnet
+bridge:
+  enableBridge: true
+  client:
+    endpoint: "https://mainnet.accumulatenetwork.io/v3"
+    timeout: "45s"
+    retryCount: 5
+    retryDelay: "3s"
+
+  # Output staging for mainnet (higher thresholds)
+  stager:
+    maxOutputs: 5000
+    flushInterval: "10s"
+    batchSize: 50
+
+  # Output submission for mainnet (conservative)
+  submitter:
+    workers: 1
+    queueSize: 500
+    timeout: "60s"
+    retryCount: 5
+    retryDelay: "5s"
+    batchSize: 25
+
+  # Credit pricing for mainnet
+  pricing:
+    basePrice: 1000
+    gasPrice: 10
+    sizePrice: 100
+    priorityRate: 2.0
+
+# Directory Network registry configuration
+registry:
+  endpoint: "https://mainnet.accumulatenetwork.io/v3"
+  timeout: "30s"
+  cacheTtl: "10m"
+  maxRetries: 5
+
+# DN paths for mainnet
+dnPaths:
+  anchorsBase: "acc://dn.acme/anchors"
+  txBase: "acc://dn.acme/tx-metadata"
+
+# Events configuration for mainnet
+events:
+  enable: true
+  reconnectMin: "2s"
+  reconnectMax: "120s"
+
+# Performance settings for mainnet
+blockTime: "5s"
+maxTransactions: 50
+
+# Security settings for mainnet
+security:
+  enableTls: true
+  requireAuth: false
+  allowedOrigins: []
+
+# Monitoring for mainnet
+monitoring:
+  enableMetrics: true
+  metricsPath: "/metrics"
+  enableTracing: false

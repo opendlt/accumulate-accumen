@@ -1,0 +1,98 @@
+# Accumulate Devnet Configuration Profile
+# This profile configures Accumen to connect to a local Accumulate devnet
+# Use with: --network=devnet or ACCUMEN_NETWORK=devnet
+
+l0:
+  source: static
+  static:
+    endpoints:
+      - http://localhost:26660  # Directory Network
+      - http://localhost:26670  # Block Validator 0
+      - http://localhost:26680  # Block Validator 1
+      - http://localhost:26690  # Block Validator 2
+  wsPath: /ws
+
+# Confirmation settings for devnet (fast)
+confirm:
+  waitForExecution: true
+  timeout: "20s"
+
+# Bridge configuration for devnet
+bridge:
+  enableBridge: true
+  client:
+    endpoint: "http://localhost:26660"
+    timeout: "15s"
+    retryCount: 2
+    retryDelay: "1s"
+
+  # Output staging for devnet (fast processing)
+  stager:
+    maxOutputs: 10000
+    flushInterval: "3s"
+    batchSize: 100
+
+  # Output submission for devnet
+  submitter:
+    workers: 3
+    queueSize: 1000
+    timeout: "20s"
+    retryCount: 2
+    retryDelay: "1s"
+    batchSize: 50
+
+  # Credit pricing for devnet (minimal costs)
+  pricing:
+    basePrice: 10
+    gasPrice: 1
+    sizePrice: 1
+    priorityRate: 1.1
+
+# Directory Network registry configuration
+registry:
+  endpoint: "http://localhost:26660"
+  timeout: "10s"
+  cacheTtl: "2m"
+  maxRetries: 2
+
+# DN paths for devnet
+dnPaths:
+  anchorsBase: "acc://devnet-dn.acme/anchors"
+  txBase: "acc://devnet-dn.acme/tx-metadata"
+
+# Events configuration for devnet
+events:
+  enable: true
+  reconnectMin: "500ms"
+  reconnectMax: "30s"
+
+# Performance settings for devnet (very fast)
+blockTime: "1s"
+maxTransactions: 100
+
+# Security settings for devnet (permissive)
+security:
+  enableTls: false
+  requireAuth: false
+  allowedOrigins: ["*"]
+
+# Development features enabled
+development:
+  enablePprof: true
+  pprofAddr: "127.0.0.1:6060"
+  enableCors: true
+  corsOrigins: ["*"]
+
+# Monitoring for devnet (full debugging)
+monitoring:
+  enableMetrics: true
+  metricsPath: "/metrics"
+  enableTracing: true
+  jaegerEndpoint: "http://localhost:14268/api/traces"
+
+# Database configuration for devnet (in-memory for speed)
+database:
+  type: "memory"
+  path: "./data/devnet.db"
+  maxConnections: 5
+  connectionTimeout: "2s"

@@ -1,0 +1,82 @@
+# Accumulate Testnet Configuration Profile
+# This profile configures Accumen to connect to the Accumulate testnet
+# Use with: --network=testnet or ACCUMEN_NETWORK=testnet
+
+l0:
+  source: static
+  static:
+    endpoints:
+      - https://testnet.accumulatenetwork.io/v3
+      - https://testnet-api.accumulate.defidevs.io/v3
+  wsPath: /ws
+
+# Confirmation settings for testnet (balanced)
+confirm:
+  waitForExecution: true
+  timeout: "45s"
+
+# Bridge configuration for testnet
+bridge:
+  enableBridge: true
+  client:
+    endpoint: "https://testnet.accumulatenetwork.io/v3"
+    timeout: "30s"
+    retryCount: 3
+    retryDelay: "2s"
+
+  # Output staging for testnet
+  stager:
+    maxOutputs: 8000
+    flushInterval: "7s"
+    batchSize: 75
+
+  # Output submission for testnet
+  submitter:
+    workers: 2
+    queueSize: 750
+    timeout: "45s"
+    retryCount: 4
+    retryDelay: "3s"
+    batchSize: 40
+
+  # Credit pricing for testnet (lower costs)
+  pricing:
+    basePrice: 100
+    gasPrice: 1
+    sizePrice: 10
+    priorityRate: 1.5
+
+# Directory Network registry configuration
+registry:
+  endpoint: "https://testnet.accumulatenetwork.io/v3"
+  timeout: "20s"
+  cacheTtl: "5m"
+  maxRetries: 3
+
+# DN paths for testnet
+dnPaths:
+  anchorsBase: "acc://testnet-dn.acme/anchors"
+  txBase: "acc://testnet-dn.acme/tx-metadata"
+
+# Events configuration for testnet
+events:
+  enable: true
+  reconnectMin: "1s"
+  reconnectMax: "60s"
+
+# Performance settings for testnet (faster)
+blockTime: "3s"
+maxTransactions: 75
+
+# Security settings for testnet
+security:
+  enableTls: true
+  requireAuth: false
+  allowedOrigins: ["*"]
+
+# Monitoring for testnet
+monitoring:
+  enableMetrics: true
+  metricsPath: "/metrics"
+  enableTracing: true
+  jaegerEndpoint: "http://localhost:14268/api/traces"

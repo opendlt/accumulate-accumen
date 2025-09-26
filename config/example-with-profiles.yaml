@@ -1,0 +1,44 @@
+# Example Accumen Configuration with Network Profiles
+# This demonstrates how to use network profiles for easy endpoint switching
+
+# Network profile configuration
+profiles:
+  name: "testnet"  # Default profile: "mainnet"|"testnet"|"devnet"|"local"
+  # path: "custom/path/to/profile.yaml"  # Optional: explicit profile path
+
+# Signer configuration (required)
+signer:
+  type: "file"
+  key: "/home/user/.accumen/testnet-key.hex"
+
+# Local overrides (these take precedence over profile settings)
+blockTime: "2s"        # Override testnet's default 3s
+maxTransactions: 25    # Override testnet's default 75
+
+# Storage configuration
+storage:
+  backend: "badger"
+  path: "data/testnet-l1"
+
+# Namespace configuration
+namespace:
+  reservedLabel: "accumen"
+  enforce: true
+
+# Snapshots configuration
+snapshots:
+  everyN: 50    # More frequent snapshots for testnet
+  retain: 10    # Keep more snapshots
+
+# The following will be automatically loaded from config/networks/testnet.yaml:
+# - l0 endpoints (testnet URLs)
+# - confirm settings (45s timeout)
+# - events settings (1s-60s reconnect)
+# - bridge settings (testnet endpoints)
+# - DN paths (testnet-specific paths)
+
+# Usage examples:
+# 1. Use profile from config:      ./accumen --config=config/example-with-profiles.yaml
+# 2. Override with CLI:            ./accumen --config=config/local.yaml --network=mainnet
+# 3. Override with env var:        ACCUMEN_NETWORK=devnet ./accumen --config=config/local.yaml
+# 4. Use local (no profile):       ./accumen --config=config/local.yaml --network=local
