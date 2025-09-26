@@ -1,4 +1,4 @@
-.PHONY: build test run-sequencer proto json clean run-sim snapshot-export snapshot-import snapshot-list
+.PHONY: build test run-sequencer proto json clean run-sim snapshot-export snapshot-import snapshot-list docker-build docker-push docker-devnet-up docker-devnet-down
 
 # Go build settings
 GOCMD=go
@@ -7,6 +7,12 @@ GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
 BINARY_NAME=accumen
 BINARY_PATH=./bin/$(BINARY_NAME)
+
+# Docker settings
+DOCKER_REGISTRY ?= accumulatenetwork
+DOCKER_TAG ?= latest
+ACCUMEN_IMAGE = $(DOCKER_REGISTRY)/accumen:$(DOCKER_TAG)
+FOLLOWER_IMAGE = $(DOCKER_REGISTRY)/accumen-follower:$(DOCKER_TAG)
 
 # Detect OS for cross-platform commands
 ifeq ($(OS),Windows_NT)
@@ -72,6 +78,31 @@ snapshot-list:
 	@echo "Listing snapshots..."
 	$(GOBUILD) -o $(BINARY_PATH) ./cmd/accucli
 	./bin/accumen snapshot list
+
+# Build Docker images
+docker-build:
+	@echo "Building Docker images..."
+	docker build -f docker/Dockerfile.accumen -t $(ACCUMEN_IMAGE) .
+	docker build -f docker/Dockerfile.follower -t $(FOLLOWER_IMAGE) .
+
+# Push Docker images
+docker-push:
+	@echo "Pushing Docker images..."
+	docker push $(ACCUMEN_IMAGE)
+	docker push $(FOLLOWER_IMAGE)
+
+# Start devnet stack
+docker-devnet-up:
+	@echo "Starting devnet stack..."
+	cd docker && docker-compose -f docker-compose.devnet.yaml up -d
+
+# Stop devnet stack
+docker-devnet-down:
+	@echo "Stopping devnet stack..."
+	cd docker && docker-compose -f docker-compose.devnet.yaml down -v
+
+# Build and push all docker images
+docker-all: docker-build docker-push
 
 # Integration tests
 test-integration:
@@ -142,4 +173,9 @@ help:
 	@echo "  snapshot-export    Export current state to snapshot"
 	@echo "  snapshot-import    Import state from snapshot (FILE=path required)"
 	@echo "  snapshot-list      List available snapshots"
+	@echo "  docker-build       Build Docker images"
+	@echo "  docker-push        Push Docker images to registry"
+	@echo "  docker-all         Build and push all Docker images"
+	@echo "  docker-devnet-up   Start devnet stack with docker-compose"
+	@echo "  docker-devnet-down Stop devnet stack and remove volumes"
 	@echo "  help               Show this help message"
