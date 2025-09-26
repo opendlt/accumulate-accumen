@@ -1,0 +1,62 @@
+# Go build artifacts
+/bin/
+/build/
+/dist/
+/*.exe
+/*.exe~
+/*.dll
+/*.so
+/*.dylib
+
+# Go test caches
+*.test
+*.out
+*.coverprofile
+
+# Rust target artifacts
+**/target/
+**/Cargo.lock
+
+# Node / npm (if used in tooling)
+node_modules/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Coverage / reports
+coverage/
+*.lcov
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+
+# Accumen orchestration / local-only files
+CLAUDE-ORCH.md
+CLAUDE.md
+
+# Local config / secrets
+config/local.yaml
+*.key
+*.pem
+
+# Snapshots, state, and Badger DB
+data/
+*.snap
+*.ldb
+*.log
+*.sst
+MANIFEST-*
+
+# Simulator / devnet outputs
+accumulate-devnet-*/
