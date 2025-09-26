@@ -550,6 +550,41 @@ func (e *ExecutionEngine) ValidateTransaction(tx *Transaction) error {
 	return nil
 }
 
+// ExecuteQuery executes a contract query in read-only mode
+func (e *ExecutionEngine) ExecuteQuery(contractAddr, entry string, args map[string]interface{}) ([]byte, []*runtime.Event, uint64, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	// Check if contract store is available
+	if e.contractStore == nil {
+		return nil, nil, 0, fmt.Errorf("contract store not available")
+	}
+
+	// Load WASM module for the contract
+	wasmBytes, wasmHash, err := e.contractStore.GetModule(contractAddr)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("contract not found: %s - %v", contractAddr, err)
+	}
+
+	// Execute contract in query mode (read-only)
+	execResult, err := e.runtime.ExecuteContractQuery(context.Background(), wasmBytes, wasmHash[:], entry, []uint64{}, e.kvStore)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("query execution failed: %w", err)
+	}
+
+	// Check for execution success
+	if !execResult.Success {
+		return nil, nil, execResult.GasUsed, fmt.Errorf("query failed: %v", execResult.Error)
+	}
+
+	// Ensure no state mutations or L0 operations were staged (safety check)
+	if len(execResult.StagedOps) > 0 {
+		return nil, nil, execResult.GasUsed, fmt.Errorf("illegal state: query mode produced staged operations")
+	}
+
+	return execResult.ReturnValue, execResult.Events, execResult.GasUsed, nil
+}
+
 // SimulateTransaction simulates transaction execution without applying state changes
 func (e *ExecutionEngine) SimulateTransaction(ctx context.Context, tx *Transaction) (*ExecResult, error) {
 	// Create temporary state store

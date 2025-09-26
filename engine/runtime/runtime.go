@@ -12,6 +12,16 @@ import (
 	"github.com/opendlt/accumulate-accumen/engine/state"
 )
 
+// ExecMode defines the execution mode for WASM contracts
+type ExecMode int
+
+const (
+	// Execute mode allows full contract execution with state mutations and L0 operations
+	Execute ExecMode = iota
+	// Query mode is read-only and prevents state mutations and L0 operations
+	Query
+)
+
 // Runtime represents the AccuWASM execution environment
 type Runtime struct {
 	wazeroRuntime wazero.Runtime
@@ -27,6 +37,8 @@ type RuntimeConfig struct {
 	MaxMemoryPages uint32
 	// Gas limit per execution
 	GasLimit uint64
+	// Gas limit for query mode (typically lower than full execution)
+	QueryGasLimit uint64
 	// Enable debug mode
 	Debug bool
 	// Cache size for compiled modules
@@ -41,6 +53,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		MaxMemoryPages: 16,      // 1MB max memory
 		GasLimit:       1000000, // 1M gas units
+		QueryGasLimit:  100000,  // 100K gas units for queries (lower limit)
 		Debug:          false,
 		CacheSize:      16,      // 16 compiled modules in cache
 	}
@@ -149,6 +162,18 @@ func (r *Runtime) LoadModule(ctx context.Context, wasmBytes []byte) error {
 
 // ExecuteContract executes a WASM contract with caching and validation
 func (r *Runtime) ExecuteContract(ctx context.Context, wasmBytes []byte, wasmHash []byte, functionName string, params []uint64, kvStore state.KVStore) (*ExecutionResult, error) {
+	// Use the unified execution path with Execute mode
+	return r.executeContractWithMode(ctx, wasmBytes, wasmHash, functionName, params, kvStore, Execute)
+}
+
+// ExecuteContractQuery executes a WASM contract in read-only query mode
+func (r *Runtime) ExecuteContractQuery(ctx context.Context, wasmBytes []byte, wasmHash []byte, functionName string, params []uint64, kvStore state.KVStore) (*ExecutionResult, error) {
+	// Use the same logic as ExecuteContract but with Query mode restrictions
+	return r.executeContractWithMode(ctx, wasmBytes, wasmHash, functionName, params, kvStore, Query)
+}
+
+// executeContractWithMode executes a contract with specified execution mode
+func (r *Runtime) executeContractWithMode(ctx context.Context, wasmBytes []byte, wasmHash []byte, functionName string, params []uint64, kvStore state.KVStore, mode ExecMode) (*ExecutionResult, error) {
 	// Convert hash to [32]byte
 	var hash [32]byte
 	copy(hash[:], wasmHash)
@@ -178,8 +203,14 @@ func (r *Runtime) ExecuteContract(ctx context.Context, wasmBytes []byte, wasmHas
 		}, nil
 	}
 
-	// Create gas meter
-	gasMeter := gas.NewMeter(gas.GasLimit(r.config.GasLimit))
+	// Create gas meter with appropriate limit based on mode
+	var gasLimit uint64
+	if mode == Query {
+		gasLimit = r.config.QueryGasLimit
+	} else {
+		gasLimit = r.config.GasLimit
+	}
+	gasMeter := gas.NewMeter(gas.GasLimit(gasLimit))
 
 	// Create host API
 	r.hostAPI = host.NewAPI(gasMeter, kvStore)
@@ -187,9 +218,9 @@ func (r *Runtime) ExecuteContract(ctx context.Context, wasmBytes []byte, wasmHas
 	// Create execution context
 	execContext := NewExecutionContext()
 
-	// Register host bindings
+	// Register host bindings with execution mode restrictions
 	hostModuleBuilder := r.wazeroRuntime.NewHostModuleBuilder("accuwasm_host")
-	if err := RegisterHostBindings(ctx, hostModuleBuilder, r.hostAPI, gasMeter, execContext); err != nil {
+	if err := RegisterHostBindingsWithMode(ctx, hostModuleBuilder, r.hostAPI, gasMeter, execContext, mode); err != nil {
 		return &ExecutionResult{
 			Success: false,
 			Error:   fmt.Errorf("failed to register host bindings: %w", err),
@@ -258,7 +289,7 @@ func (r *Runtime) ExecuteContract(ctx context.Context, wasmBytes []byte, wasmHas
 	receipt := &state.Receipt{
 		Success:      true,
 		GasUsed:      gasUsed,
-		GasLimit:     r.config.GasLimit,
+		GasLimit:     gasLimit,
 		FunctionName: functionName,
 		ReturnValue:  returnValue,
 		ModuleHash:   hash[:],

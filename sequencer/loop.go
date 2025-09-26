@@ -873,6 +873,13 @@ func (s *Sequencer) GetStats() *SequencerStats {
 	return stats
 }
 
+// GetExecutionEngine returns the execution engine for query operations
+func (s *Sequencer) GetExecutionEngine() *ExecutionEngine {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.engine
+}
+
 // metricsServer runs a metrics server if enabled
 func (s *Sequencer) metricsServer(ctx context.Context) {
 	// Simplified metrics server

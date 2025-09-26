@@ -102,16 +102,27 @@ type SubmitTxResult struct {
 }
 
 // QueryParams represents parameters for accumen.query()
+// Supports both state key queries and contract function calls
 type QueryParams struct {
-	Contract string `json:"contract"`
-	Key      string `json:"key"`
+	Contract string                 `json:"contract"`
+	Key      string                 `json:"key,omitempty"`      // For state queries
+	Entry    string                 `json:"entry,omitempty"`    // For function calls
+	Args     map[string]interface{} `json:"args,omitempty"`     // For function calls
 }
 
 // QueryResult represents the result of accumen.query()
 type QueryResult struct {
-	Value  *string `json:"value"`
-	Exists bool    `json:"exists"`
-	Type   string  `json:"type,omitempty"`
+	Value    *string `json:"value"`
+	Exists   bool    `json:"exists"`
+	Type     string  `json:"type,omitempty"`
+	Events   []Event `json:"events,omitempty"`   // For contract function calls
+	GasUsed  uint64  `json:"gasUsed,omitempty"`  // For contract function calls
+}
+
+// Event represents a contract event for query results
+type Event struct {
+	Type string `json:"type"`
+	Data string `json:"data"` // hex-encoded event data
 }
 
 // DeployContractParams represents parameters for accumen.deployContract()
@@ -460,10 +471,64 @@ func (s *Server) handleQuery(params interface{}) (interface{}, *RPCError) {
 	if queryParams.Contract == "" {
 		return nil, &RPCError{Code: -32602, Message: "Missing required field: contract"}
 	}
-	if queryParams.Key == "" {
-		return nil, &RPCError{Code: -32602, Message: "Missing required field: key"}
+
+	// Either key (for state query) or entry (for function call) must be provided
+	if queryParams.Key == "" && queryParams.Entry == "" {
+		return nil, &RPCError{Code: -32602, Message: "Either 'key' (for state query) or 'entry' (for function call) must be provided"}
 	}
 
+	// Both key and entry cannot be provided simultaneously
+	if queryParams.Key != "" && queryParams.Entry != "" {
+		return nil, &RPCError{Code: -32602, Message: "Cannot specify both 'key' and 'entry' - use either state query or function call"}
+	}
+
+	// Handle function call queries (read-only contract execution)
+	if queryParams.Entry != "" {
+		// This is a contract function call query
+		if s.readOnly {
+			return nil, &RPCError{Code: -32601, Message: "Contract function calls not supported in read-only mode"}
+		}
+
+		// Get execution engine from sequencer
+		engine := s.sequencer.GetExecutionEngine()
+		if engine == nil {
+			return nil, &RPCError{Code: -32603, Message: "Execution engine not available"}
+		}
+
+		// Execute contract in query mode
+		returnValue, events, gasUsed, err := engine.ExecuteQuery(queryParams.Contract, queryParams.Entry, queryParams.Args)
+		if err != nil {
+			return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Query execution failed: %v", err)}
+		}
+
+		// Convert events to RPC format
+		var rpcEvents []Event
+		for _, event := range events {
+			rpcEvents = append(rpcEvents, Event{
+				Type: event.Type,
+				Data: hex.EncodeToString(event.Data),
+			})
+		}
+
+		// Convert return value to hex string
+		var valueStr *string
+		if len(returnValue) > 0 {
+			hexValue := hex.EncodeToString(returnValue)
+			valueStr = &hexValue
+		}
+
+		result := &QueryResult{
+			Value:   valueStr,
+			Exists:  len(returnValue) > 0,
+			Type:    "bytes",
+			Events:  rpcEvents,
+			GasUsed: gasUsed,
+		}
+
+		return result, nil
+	}
+
+	// Handle state key queries (traditional state lookup)
 	var value []byte
 	var exists bool
 
