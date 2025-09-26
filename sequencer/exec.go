@@ -6,6 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
+
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
@@ -13,7 +16,9 @@ import (
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
+	"github.com/opendlt/accumulate-accumen/internal/accutil"
 	"github.com/opendlt/accumulate-accumen/internal/config"
+	"github.com/opendlt/accumulate-accumen/registry/authority"
 	"github.com/opendlt/accumulate-accumen/registry/dn"
 	"github.com/opendlt/accumulate-accumen/types/l1"
 )
@@ -110,9 +115,11 @@ type ExecutionEngine struct {
 	scheduleProvider *pricing.ScheduleProvider
 
 	// Authority scope management
-	scopeCache    *ScopeCache
-	limitTracker  *outputs.OperationLimitTracker
-	dnEndpoint    string
+	scopeCache     *ScopeCache
+	limitTracker   *outputs.OperationLimitTracker
+	dnEndpoint     string
+	l0Querier      *l0api.Querier
+	bindingRegistry *authority.Registry
 
 	// Namespace management
 	namespaceManager *dn.NamespaceManager
@@ -185,6 +192,9 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 		}
 	}
 
+	// Create binding registry for authority management
+	bindingRegistry := authority.NewRegistry(kvStore)
+
 	engine := &ExecutionEngine{
 		config:           config,
 		runtime:          wasmRuntime,
@@ -195,6 +205,8 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 		scopeCache:       NewScopeCache(30 * time.Second), // Cache scopes for 30 seconds
 		limitTracker:     outputs.NewOperationLimitTracker(),
 		dnEndpoint:       dnEndpoint,
+		l0Querier:        l0Querier,
+		bindingRegistry:  bindingRegistry,
 		namespaceManager: namespaceManager,
 		namespaceConfig:  namespaceConfig,
 		currentHeight:    0,
@@ -419,8 +431,36 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		return result
 	}
 
-	// Verify staged operations against authority scope if there are any
+	// Verify staged operations against authority binding if there are any
 	if len(execResult.StagedOps) > 0 {
+		// Parse contract URL
+		contractURL, err := accutil.ParseURL(tx.To)
+		if err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("invalid contract URL %s: %v", tx.To, err)
+			result.ExecutionTime = time.Since(startTime)
+			return result
+		}
+
+		// Load binding for this contract
+		binding, err := e.bindingRegistry.Load(contractURL)
+		if err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("failed to load authority binding for contract %s: %v", tx.To, err)
+			result.ExecutionTime = time.Since(startTime)
+			return result
+		}
+
+		// Verify authority by checking if the key book is enabled for target accounts
+		if e.l0Querier != nil {
+			if err := e.verifyL0Authority(ctx, execResult.StagedOps, binding); err != nil {
+				result.Success = false
+				result.Error = fmt.Sprintf("L0 authority verification failed: %v", err)
+				result.ExecutionTime = time.Since(startTime)
+				return result
+			}
+		}
+
 		// Fetch authority scope for this contract
 		scope, err := e.scopeCache.Get(ctx, e.dnEndpoint, tx.To)
 		if err != nil {
@@ -430,8 +470,8 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 			return result
 		}
 
-		// Verify all staged operations
-		if err := outputs.VerifyAll(execResult.StagedOps, scope, e.limitTracker); err != nil {
+		// Verify all staged operations with binding permissions
+		if err := outputs.VerifyAllWithBinding(execResult.StagedOps, scope, binding, e.limitTracker); err != nil {
 			result.Success = false
 			result.Error = fmt.Sprintf("authority verification failed: %v", err)
 			result.ExecutionTime = time.Since(startTime)
@@ -723,3 +763,141 @@ func (e *ExecutionEngine) GetCurrentSchedule() *pricing.Schedule {
 	}
 	return pricing.DefaultSchedule()
 }
+
+// verifyL0Authority verifies that the binding's key book is authorized for target accounts
+func (e *ExecutionEngine) verifyL0Authority(ctx context.Context, stagedOps []*runtime.StagedOp, binding *authority.Binding) error {
+	for _, op := range stagedOps {
+		var targetURL *url.URL
+		var err error
+
+		// Get target account URL based on operation type
+		switch op.Type {
+		case "write_data", "writeData":
+			targetURL = op.Account
+		case "send_tokens", "sendTokens":
+			targetURL = op.To
+		case "update_auth", "updateAuth":
+			targetURL = op.Account
+		default:
+			return fmt.Errorf("unsupported operation type: %s", op.Type)
+		}
+
+		if targetURL == nil {
+			return fmt.Errorf("target URL cannot be nil for operation %s", op.Type)
+		}
+
+		// Query the target account to check its authorities
+		accountRecord, err := e.l0Querier.QueryAccount(ctx, targetURL)
+		if err != nil {
+			return fmt.Errorf("failed to query target account %s: %w", targetURL, err)
+		}
+
+		// Check if the binding's key book is authorized for this account
+		if err := e.checkKeyBookAuthority(accountRecord.Account, binding); err != nil {
+			return fmt.Errorf("key book authority check failed for account %s: %w", targetURL, err)
+		}
+	}
+
+	return nil
+}
+
+// checkKeyBookAuthority checks if the binding's key book has authority over the account
+func (e *ExecutionEngine) checkKeyBookAuthority(account protocol.Account, binding *authority.Binding) error {
+	// Get account authorities based on account type
+	var authorities []*url.URL
+	var err error
+
+	switch acc := account.(type) {
+	case *protocol.TokenAccount:
+		authorities = acc.Authorities
+	case *protocol.DataAccount:
+		authorities = acc.Authorities
+	case *protocol.LiteDataAccount:
+		// Lite accounts use the parent identity for authority
+		parentURL, err := url.Parse(acc.Url.String())
+		if err != nil {
+			return fmt.Errorf("invalid lite account URL: %w", err)
+		}
+		parentADI, err := accutil.GetADI(parentURL)
+		if err != nil {
+			return fmt.Errorf("failed to get ADI from lite account: %w", err)
+		}
+		authorities = []*url.URL{parentADI}
+	case *protocol.LiteTokenAccount:
+		// Lite accounts use the parent identity for authority
+		parentURL, err := url.Parse(acc.Url.String())
+		if err != nil {
+			return fmt.Errorf("invalid lite account URL: %w", err)
+		}
+		parentADI, err := accutil.GetADI(parentURL)
+		if err != nil {
+			return fmt.Errorf("failed to get ADI from lite account: %w", err)
+		}
+		authorities = []*url.URL{parentADI}
+	default:
+		return fmt.Errorf("unsupported account type: %T", account)
+	}
+
+	if authorities == nil {
+		authorities, err = e.getDefaultAuthorities(account)
+		if err != nil {
+			return fmt.Errorf("failed to get default authorities: %w", err)
+		}
+	}
+
+	// Check if any of the account's authorities match the binding's key book
+	bindingKeyBookCanonical := accutil.Canonicalize(binding.KeyBook)
+	for _, authURL := range authorities {
+		authCanonical := accutil.Canonicalize(authURL)
+		if authCanonical == bindingKeyBookCanonical {
+			return nil // Found matching authority
+		}
+
+		// Also check if the authority is under the same ADI as the key book
+		authADI, err := accutil.GetADI(authURL)
+		if err != nil {
+			continue // Skip invalid authorities
+		}
+		bindingADI, err := accutil.GetADI(binding.KeyBook)
+		if err != nil {
+			continue
+		}
+		if accutil.Canonicalize(authADI) == accutil.Canonicalize(bindingADI) {
+			return nil // Authority under the same ADI
+		}
+	}
+
+	return fmt.Errorf("key book %s is not authorized for this account", binding.KeyBook)
+}
+
+// getDefaultAuthorities returns default authorities for accounts that don't have explicit authorities
+func (e *ExecutionEngine) getDefaultAuthorities(account protocol.Account) ([]*url.URL, error) {
+	var accountURL *url.URL
+	var err error
+
+	switch acc := account.(type) {
+	case *protocol.TokenAccount:
+		accountURL, err = url.Parse(acc.Url.String())
+	case *protocol.DataAccount:
+		accountURL, err = url.Parse(acc.Url.String())
+	case *protocol.LiteTokenAccount:
+		accountURL, err = url.Parse(acc.Url.String())
+	case *protocol.LiteDataAccount:
+		accountURL, err = url.Parse(acc.Url.String())
+	default:
+		return nil, fmt.Errorf("unsupported account type for default authorities: %T", account)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("invalid account URL: %w", err)
+	}
+
+	// Default authority is the parent ADI
+	parentADI, err := accutil.GetADI(accountURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent ADI: %w", err)
+	}
+
+	return []*url.URL{parentADI}, nil
+}
+

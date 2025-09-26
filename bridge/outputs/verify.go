@@ -11,6 +11,7 @@ import (
 
 	"github.com/opendlt/accumulate-accumen/bridge/outputs/limits"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
+	"github.com/opendlt/accumulate-accumen/registry/authority"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 )
 
@@ -681,6 +682,77 @@ func verifyUpdateAuth(op *runtime.StagedOp, scope *AuthorityScope, tracker *Oper
 				matchedPerm.MaxPerBlock, matchedPerm.KeyPattern)
 		}
 		counter.Increment()
+	}
+
+	return nil
+}
+
+// VerifyAllWithBinding checks if all staged operations are permitted by both the authority scope and binding permissions
+func VerifyAllWithBinding(staged []*runtime.StagedOp, scope *AuthorityScope, binding *authority.Binding, tracker *OperationLimitTracker) error {
+	if scope == nil {
+		return fmt.Errorf("authority scope cannot be nil")
+	}
+
+	if binding == nil {
+		return fmt.Errorf("authority binding cannot be nil")
+	}
+
+	if len(staged) == 0 {
+		return nil // No operations to verify
+	}
+
+	// First verify with the existing authority scope
+	if err := VerifyAll(staged, scope, tracker); err != nil {
+		return fmt.Errorf("authority scope verification failed: %w", err)
+	}
+
+	// Then verify each operation against binding permissions
+	for i, op := range staged {
+		if err := verifyOperationBinding(op, binding); err != nil {
+			return fmt.Errorf("operation %d binding verification failed: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// verifyOperationBinding verifies a single operation against binding permissions
+func verifyOperationBinding(op *runtime.StagedOp, binding *authority.Binding) error {
+	switch op.Type {
+	case "write_data", "writeData":
+		if !binding.HasPermission(authority.PermWriteData) {
+			return fmt.Errorf("binding does not have writeData permission")
+		}
+	case "send_tokens", "sendTokens":
+		if !binding.HasPermission(authority.PermSendTokens) {
+			return fmt.Errorf("binding does not have sendTokens permission")
+		}
+	case "update_auth", "updateAuth":
+		if !binding.HasPermission(authority.PermUpdateAuth) {
+			return fmt.Errorf("binding does not have updateAuth permission")
+		}
+	default:
+		return fmt.Errorf("unsupported operation type: %s", op.Type)
+	}
+
+	return nil
+}
+
+// VerifyBindingOnly checks if staged operations are permitted by binding permissions only (without authority scope)
+func VerifyBindingOnly(staged []*runtime.StagedOp, binding *authority.Binding) error {
+	if binding == nil {
+		return fmt.Errorf("authority binding cannot be nil")
+	}
+
+	if len(staged) == 0 {
+		return nil // No operations to verify
+	}
+
+	// Verify each operation against binding permissions
+	for i, op := range staged {
+		if err := verifyOperationBinding(op, binding); err != nil {
+			return fmt.Errorf("operation %d binding verification failed: %w", i, err)
+		}
 	}
 
 	return nil
