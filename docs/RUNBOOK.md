@@ -797,6 +797,283 @@ The test can be customized by modifying:
 
 This comprehensive smoke test validates that Accumen works correctly with a real Accumulate devnet, providing confidence in the full integration stack.
 
+## Run with Docker (devnet + accumen + follower)
+
+For the fastest way to get a complete Accumen stack running, use the Docker Compose setup that includes an Accumulate devnet, Accumen sequencer, and follower.
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- At least 4GB available RAM
+- Ports 8080, 8666, 8667, 26656, 26657 available
+
+### Quick Start
+
+```bash
+# Build Docker images
+make docker-build
+
+# Start the complete stack
+make docker-devnet-up
+
+# Check status
+curl http://localhost:8666/health  # Accumen sequencer
+curl http://localhost:8667/health  # Accumen follower
+curl http://localhost:8080/status  # Accumulate devnet
+```
+
+### What's Included
+
+The Docker Compose stack provides:
+
+1. **Accumulate Devnet**: Complete 3-BVN Accumulate network with Directory Network
+2. **Accumen Sequencer**: L1 blockchain producing blocks and executing contracts
+3. **Accumen Follower**: Read-only replica for queries and indexing
+
+#### Service Details
+
+- **accumulate-devnet**: Runs on ports 8080 (API), 26656 (P2P), 26657 (Tendermint RPC)
+- **accumen**: Sequencer on port 8666
+- **follower**: Follower on port 8667
+
+### Configuration
+
+The stack uses dedicated Docker configuration:
+
+```yaml
+# docker/config/docker.yaml (mounted in containers)
+l0:
+  source: static
+  static:
+    endpoints:
+      - http://accumulate-devnet:8080
+
+bridge:
+  enableBridge: true
+  client:
+    serverURL: "http://accumulate-devnet:8080"
+
+blockTime: "2s"
+maxTransactions: 100
+```
+
+### Operations
+
+#### Starting the Stack
+
+```bash
+# Start all services
+make docker-devnet-up
+
+# View logs
+docker-compose -f docker/docker-compose.devnet.yaml logs -f
+
+# View specific service logs
+docker logs accumen-sequencer -f
+docker logs accumen-follower -f
+docker logs accumulate-devnet -f
+```
+
+#### Stopping the Stack
+
+```bash
+# Stop and remove all containers and volumes
+make docker-devnet-down
+
+# Stop without removing volumes (preserve data)
+cd docker && docker-compose -f docker-compose.devnet.yaml stop
+```
+
+#### Building Images
+
+```bash
+# Build images for both accumen and follower
+make docker-build
+
+# Build and push to registry
+make docker-push
+
+# Build and push in one command
+make docker-all
+```
+
+#### Custom Registry
+
+```bash
+# Use custom registry
+make docker-build DOCKER_REGISTRY=my-registry.com DOCKER_TAG=v1.0.0
+make docker-push DOCKER_REGISTRY=my-registry.com DOCKER_TAG=v1.0.0
+```
+
+### Testing the Stack
+
+Once running, test the complete integration:
+
+```bash
+# 1. Check all services are healthy
+curl http://localhost:8080/status   # Accumulate devnet
+curl http://localhost:8666/health   # Accumen sequencer
+curl http://localhost:8667/health   # Accumen follower
+
+# 2. Deploy a test contract (requires accucli)
+go build -o bin/accucli ./cmd/accucli
+./bin/accucli deploy \
+  --addr=acc://test-counter.acme \
+  --wasm=./examples/counter.wasm \
+  --rpc=http://localhost:8666
+
+# 3. Execute contract method
+./bin/accucli submit \
+  --contract=acc://test-counter.acme \
+  --entry=increment \
+  --arg=amount:1 \
+  --rpc=http://localhost:8666
+
+# 4. Query contract state via follower
+./bin/accucli query \
+  --contract=acc://test-counter.acme \
+  --key=counter \
+  --rpc=http://localhost:8667
+
+# 5. Verify metadata written to L0
+curl -X POST http://localhost:8080/v3 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1,
+    "method": "query",
+    "params": {
+      "url": "acc://accumen-metadata.acme"
+    }
+  }'
+```
+
+### Container Images
+
+The Docker setup uses distroless images for security and minimal attack surface:
+
+#### Base Images
+- **Builder stage**: `golang:1.21-alpine` for compilation
+- **Runtime stage**: `gcr.io/distroless/static:nonroot` for execution
+
+#### Image Features
+- CGO disabled for static binaries
+- Optimized with `-ldflags="-w -s"` for smaller size
+- Runs as non-root user for security
+- Includes default configuration
+
+#### Image Sizes
+- accumen image: ~20MB
+- follower image: ~20MB (same binary, different configuration)
+
+### Networking
+
+The stack uses a dedicated Docker network (`accumulate-devnet`) with service discovery:
+
+```yaml
+networks:
+  accumulate-devnet:
+    driver: bridge
+```
+
+Services communicate using container names:
+- `accumulate-devnet` → Accumulate API
+- `accumen` → Accumen sequencer
+- `follower` → Accumen follower
+
+### Volumes
+
+Persistent volumes store blockchain data:
+
+```yaml
+volumes:
+  accumulate-data:    # Accumulate blockchain state
+  accumen-data:       # Accumen sequencer state
+  follower-data:      # Follower indexed data
+```
+
+### Health Checks
+
+The Accumulate devnet includes health checks:
+
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:8080/status"]
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 60s
+```
+
+Accumen services start only after devnet is healthy.
+
+### Development Workflow
+
+The Docker stack enables rapid development:
+
+```bash
+# 1. Start stack
+make docker-devnet-up
+
+# 2. Make code changes
+vim cmd/accumen/main.go
+
+# 3. Rebuild and restart
+make docker-build
+make docker-devnet-down
+make docker-devnet-up
+
+# 4. Test changes
+curl http://localhost:8666/health
+```
+
+### Production Considerations
+
+For production use:
+
+1. **Configuration**: Use production-specific config files mounted as volumes
+2. **Secrets**: Use Docker secrets or external secret management
+3. **Monitoring**: Add monitoring containers (Prometheus, Grafana)
+4. **Load Balancing**: Use multiple replicas with load balancer
+5. **Backup**: Configure volume backup strategies
+
+### Troubleshooting
+
+#### Container Won't Start
+
+```bash
+# Check container logs
+docker logs accumen-sequencer
+
+# Check resource usage
+docker stats
+
+# Verify port availability
+netstat -tlnp | grep -E '(8666|8667|8080)'
+```
+
+#### Service Connectivity Issues
+
+```bash
+# Test network connectivity between containers
+docker exec accumen-sequencer ping accumulate-devnet
+
+# Check container IP addresses
+docker network inspect accumulate-devnet
+```
+
+#### Data Persistence Issues
+
+```bash
+# Check volume mounts
+docker inspect accumen-sequencer | jq '.[0].Mounts'
+
+# Verify volume data
+docker volume ls
+docker volume inspect accumen-data
+```
+
+The Docker Compose setup provides the fastest way to get a complete Accumen development environment running with full L0 integration.
+
 ## Deploying a Contract via RPC
 
 Accumen supports deploying WASM smart contracts through the JSON-RPC API. Contracts are stored persistently and referenced by their Accumulate-style addresses.
