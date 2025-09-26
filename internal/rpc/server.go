@@ -17,6 +17,8 @@ import (
 	"github.com/opendlt/accumulate-accumen/follower/indexer"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 	"github.com/opendlt/accumulate-accumen/types/l1"
+	"github.com/opendlt/accumulate-accumen/types/proto/accumen"
+	"google.golang.org/protobuf/proto"
 )
 
 // Server provides a JSON-RPC interface for Accumen
@@ -277,6 +279,10 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	case "accumen.getL1Receipt":
 		result, err = s.handleGetL1Receipt(req.Params)
+	case "accumen.getTxReceipt":
+		result, err = s.handleGetTxReceipt(req.Params)
+	case "accumen.getBlockHeader":
+		result, err = s.handleGetBlockHeader(req.Params)
 	default:
 		err = &RPCError{Code: -32601, Message: "Method not found"}
 	}
@@ -595,6 +601,42 @@ type GetL1ReceiptResult struct {
 	AnchorTxIDs []string                  `json:"anchorTxIds,omitempty"` // hex-encoded anchor tx IDs
 }
 
+// GetTxReceiptParams represents parameters for accumen.getTxReceipt()
+type GetTxReceiptParams struct {
+	Hash string `json:"hash"`
+}
+
+// GetTxReceiptResult represents the result of accumen.getTxReceipt()
+type GetTxReceiptResult struct {
+	Height  uint64        `json:"height"`
+	Index   int           `json:"index"`
+	Events  []ReceiptEvent `json:"events"`
+	GasUsed uint64        `json:"gasUsed"`
+	Error   string        `json:"error,omitempty"`
+	L0TxIDs []string      `json:"l0TxIds"`
+}
+
+// ReceiptEvent represents an event in the receipt result
+type ReceiptEvent struct {
+	Type string `json:"type"`
+	Data string `json:"data"` // hex-encoded
+}
+
+// GetBlockHeaderParams represents parameters for accumen.getBlockHeader()
+type GetBlockHeaderParams struct {
+	Height uint64 `json:"height"`
+}
+
+// GetBlockHeaderResult represents the result of accumen.getBlockHeader()
+type GetBlockHeaderResult struct {
+	Height      uint64 `json:"height"`
+	PrevHash    string `json:"prevHash"`
+	TxsRoot     string `json:"txsRoot"`
+	ResultsRoot string `json:"resultsRoot"`
+	StateRoot   string `json:"stateRoot"`
+	Time        int64  `json:"time"`
+}
+
 // handleGetTx handles accumen.getTx() method
 func (s *Server) handleGetTx(params interface{}) (interface{}, *RPCError) {
 	// Parse parameters
@@ -822,6 +864,123 @@ func (s *Server) handleGetL1Receipt(params interface{}) (interface{}, *RPCError)
 
 	// L1 receipt not found
 	return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("L1 receipt not found for hash: %s", receiptParams.Hash)}
+}
+
+// handleGetTxReceipt handles accumen.getTxReceipt() method
+func (s *Server) handleGetTxReceipt(params interface{}) (interface{}, *RPCError) {
+	// Parse parameters
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+	}
+
+	var receiptParams GetTxReceiptParams
+	if err := json.Unmarshal(paramsBytes, &receiptParams); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
+	}
+
+	// Validate hash parameter
+	if receiptParams.Hash == "" {
+		return nil, &RPCError{
+			Code:    -32602,
+			Message: "hash parameter is required",
+		}
+	}
+
+	// Parse hex hash
+	hashBytes, err := hex.DecodeString(receiptParams.Hash)
+	if err != nil {
+		return nil, &RPCError{
+			Code:    -32602,
+			Message: "hash must be valid hex string",
+		}
+	}
+
+	if len(hashBytes) != 32 {
+		return nil, &RPCError{
+			Code:    -32602,
+			Message: "hash must be 32 bytes (64 hex characters)",
+		}
+	}
+
+	// Convert to [32]byte
+	var hash [32]byte
+	copy(hash[:], hashBytes)
+
+	// Load receipt from storage
+	receipt, height, index, err := state.LoadReceiptByHash(s.kvStore, hash)
+	if err != nil {
+		return nil, &RPCError{
+			Code:    -32000,
+			Message: "Receipt not found",
+		}
+	}
+
+	// Convert events to result format
+	events := make([]ReceiptEvent, len(receipt.Events))
+	for i, event := range receipt.Events {
+		events[i] = ReceiptEvent{
+			Type: event.Type,
+			Data: hex.EncodeToString(event.Data),
+		}
+	}
+
+	// Build result
+	result := GetTxReceiptResult{
+		Height:  height,
+		Index:   index,
+		Events:  events,
+		GasUsed: receipt.GasUsed,
+		Error:   receipt.Error,
+		L0TxIDs: receipt.L0TxIDs,
+	}
+
+	return result, nil
+}
+
+// handleGetBlockHeader handles accumen.getBlockHeader() method
+func (s *Server) handleGetBlockHeader(params interface{}) (interface{}, *RPCError) {
+	// Parse parameters
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+	}
+
+	var headerParams GetBlockHeaderParams
+	if err := json.Unmarshal(paramsBytes, &headerParams); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
+	}
+
+	// Load block header from storage
+	headerKey := fmt.Sprintf("/block/header/%d", headerParams.Height)
+	headerBytes, err := s.kvStore.Get([]byte(headerKey))
+	if err != nil {
+		return nil, &RPCError{
+			Code:    -32000,
+			Message: fmt.Sprintf("Block header not found for height %d", headerParams.Height),
+		}
+	}
+
+	// Deserialize block header using protobuf
+	var header accumen.BlockHeader
+	if err := proto.Unmarshal(headerBytes, &header); err != nil {
+		return nil, &RPCError{
+			Code:    -32000,
+			Message: "Failed to parse block header",
+		}
+	}
+
+	// Build result
+	result := GetBlockHeaderResult{
+		Height:      header.Height,
+		PrevHash:    hex.EncodeToString(header.PrevHash),
+		TxsRoot:     hex.EncodeToString(header.TxsRoot),
+		ResultsRoot: hex.EncodeToString(header.ResultsRoot),
+		StateRoot:   hex.EncodeToString(header.StateRoot),
+		Time:        header.Time,
+	}
+
+	return result, nil
 }
 
 // generateTxID generates a unique transaction ID

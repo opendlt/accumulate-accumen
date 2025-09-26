@@ -2,7 +2,9 @@ package state
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
@@ -10,8 +12,23 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Receipt represents an execution receipt for WASM contract execution
+// Receipt represents a transaction execution receipt
 type Receipt struct {
+	TxHash   [32]byte  `json:"tx_hash"`
+	Events   []Event   `json:"events"`
+	GasUsed  uint64    `json:"gas_used"`
+	Error    string    `json:"error,omitempty"`
+	L0TxIDs  []string  `json:"l0_tx_ids"`
+}
+
+// Event represents an event emitted during transaction execution
+type Event struct {
+	Type string `json:"type"`
+	Data []byte `json:"data"`
+}
+
+// LegacyReceipt represents the original execution receipt for WASM contract execution
+type LegacyReceipt struct {
 	// Execution metadata
 	Success      bool      `json:"success"`
 	Timestamp    time.Time `json:"timestamp"`
@@ -107,9 +124,18 @@ func (level LogLevel) String() string {
 	}
 }
 
-// NewReceipt creates a new execution receipt
-func NewReceipt() *Receipt {
+// NewReceipt creates a new transaction receipt
+func NewReceipt(txHash [32]byte) *Receipt {
 	return &Receipt{
+		TxHash:  txHash,
+		Events:  make([]Event, 0),
+		L0TxIDs: make([]string, 0),
+	}
+}
+
+// NewLegacyReceipt creates a new execution receipt
+func NewLegacyReceipt() *LegacyReceipt {
+	return &LegacyReceipt{
 		Timestamp:     time.Now(),
 		StateChanges:  make([]StateChange, 0),
 		Logs:          make([]LogEntry, 0),
@@ -117,8 +143,22 @@ func NewReceipt() *Receipt {
 	}
 }
 
-// AddStateChange adds a state change to the receipt
-func (r *Receipt) AddStateChange(op Operation, key, oldValue, newValue []byte) {
+// AddEvent adds an event to the receipt
+func (r *Receipt) AddEvent(eventType string, data []byte) {
+	event := Event{
+		Type: eventType,
+		Data: append([]byte(nil), data...), // Copy data
+	}
+	r.Events = append(r.Events, event)
+}
+
+// AddL0TxID adds an L0 transaction ID to the receipt
+func (r *Receipt) AddL0TxID(txID string) {
+	r.L0TxIDs = append(r.L0TxIDs, txID)
+}
+
+// AddStateChange adds a state change to the legacy receipt
+func (r *LegacyReceipt) AddStateChange(op Operation, key, oldValue, newValue []byte) {
 	change := StateChange{
 		Operation: op,
 		Key:       make([]byte, len(key)),
@@ -133,8 +173,8 @@ func (r *Receipt) AddStateChange(op Operation, key, oldValue, newValue []byte) {
 	r.StateChanges = append(r.StateChanges, change)
 }
 
-// AddLog adds a log entry to the receipt
-func (r *Receipt) AddLog(level LogLevel, message string) {
+// AddLog adds a log entry to the legacy receipt
+func (r *LegacyReceipt) AddLog(level LogLevel, message string) {
 	log := LogEntry{
 		Level:     level,
 		Message:   message,
@@ -144,8 +184,8 @@ func (r *Receipt) AddLog(level LogLevel, message string) {
 	r.Logs = append(r.Logs, log)
 }
 
-// SetError sets error information in the receipt
-func (r *Receipt) SetError(err error, code uint32) {
+// SetError sets error information in the legacy receipt
+func (r *LegacyReceipt) SetError(err error, code uint32) {
 	r.Success = false
 	if err != nil {
 		r.Error = err.Error()
@@ -154,7 +194,7 @@ func (r *Receipt) SetError(err error, code uint32) {
 }
 
 // GetGasEfficiency returns the gas efficiency ratio (0-1)
-func (r *Receipt) GetGasEfficiency() float64 {
+func (r *LegacyReceipt) GetGasEfficiency() float64 {
 	if r.GasLimit == 0 {
 		return 0
 	}
@@ -162,7 +202,7 @@ func (r *Receipt) GetGasEfficiency() float64 {
 }
 
 // GetMemoryEfficiency returns the memory efficiency ratio (0-1)
-func (r *Receipt) GetMemoryEfficiency() float64 {
+func (r *LegacyReceipt) GetMemoryEfficiency() float64 {
 	if r.MemoryLimit == 0 {
 		return 0
 	}
@@ -171,6 +211,11 @@ func (r *Receipt) GetMemoryEfficiency() float64 {
 
 // ToJSON converts the receipt to JSON
 func (r *Receipt) ToJSON() ([]byte, error) {
+	return json.Marshal(r)
+}
+
+// ToJSON converts the legacy receipt to JSON
+func (r *LegacyReceipt) ToJSON() ([]byte, error) {
 	return json.Marshal(r)
 }
 
@@ -183,9 +228,42 @@ func FromJSON(data []byte) (*Receipt, error) {
 	return &receipt, nil
 }
 
+// FromLegacyJSON creates a legacy receipt from JSON data
+func FromLegacyJSON(data []byte) (*LegacyReceipt, error) {
+	var receipt LegacyReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		return nil, err
+	}
+	return &receipt, nil
+}
+
 // Clone creates a deep copy of the receipt
 func (r *Receipt) Clone() *Receipt {
 	clone := &Receipt{
+		TxHash:  r.TxHash,
+		GasUsed: r.GasUsed,
+		Error:   r.Error,
+	}
+
+	// Deep copy events
+	clone.Events = make([]Event, len(r.Events))
+	for i, event := range r.Events {
+		clone.Events[i] = Event{
+			Type: event.Type,
+			Data: append([]byte(nil), event.Data...),
+		}
+	}
+
+	// Deep copy L0 transaction IDs
+	clone.L0TxIDs = make([]string, len(r.L0TxIDs))
+	copy(clone.L0TxIDs, r.L0TxIDs)
+
+	return clone
+}
+
+// Clone creates a deep copy of the legacy receipt
+func (r *LegacyReceipt) Clone() *LegacyReceipt {
+	clone := &LegacyReceipt{
 		Success:       r.Success,
 		Timestamp:     r.Timestamp,
 		BlockHeight:   r.BlockHeight,
@@ -438,4 +516,130 @@ func SortTxResults(results []*accumen.TxResult) {
 		}
 		return len(a) < len(b)
 	})
+}
+
+// KVStore interface for key-value storage operations
+type KVStore interface {
+	Get(key []byte) ([]byte, error)
+	Set(key []byte, value []byte) error
+	Delete(key []byte) error
+	Iterate(fn func(key, value []byte) error) error
+}
+
+// StoreReceipt stores a receipt in the KV store
+func StoreReceipt(kv KVStore, height uint64, index int, receipt *Receipt) error {
+	// Serialize receipt to JSON
+	receiptData, err := receipt.ToJSON()
+	if err != nil {
+		return fmt.Errorf("failed to serialize receipt: %w", err)
+	}
+
+	// Create keys for storage
+	// Primary key: /receipts/height/index -> receipt data
+	heightIndexKey := fmt.Sprintf("/receipts/%d/%d", height, index)
+	if err := kv.Set([]byte(heightIndexKey), receiptData); err != nil {
+		return fmt.Errorf("failed to store receipt by height/index: %w", err)
+	}
+
+	// Secondary index: /receipts/hash/<hash> -> height,index
+	hashHex := hex.EncodeToString(receipt.TxHash[:])
+	hashKey := fmt.Sprintf("/receipts/hash/%s", hashHex)
+	locationData := fmt.Sprintf("%d,%d", height, index)
+	if err := kv.Set([]byte(hashKey), []byte(locationData)); err != nil {
+		return fmt.Errorf("failed to store receipt hash index: %w", err)
+	}
+
+	return nil
+}
+
+// LoadReceiptByHash loads a receipt by transaction hash
+func LoadReceiptByHash(kv KVStore, hash [32]byte) (*Receipt, uint64, int, error) {
+	// Look up location by hash
+	hashHex := hex.EncodeToString(hash[:])
+	hashKey := fmt.Sprintf("/receipts/hash/%s", hashHex)
+
+	locationData, err := kv.Get([]byte(hashKey))
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("receipt not found for hash %s: %w", hashHex, err)
+	}
+
+	// Parse location (height,index)
+	var height uint64
+	var index int
+	if _, err := fmt.Sscanf(string(locationData), "%d,%d", &height, &index); err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to parse receipt location: %w", err)
+	}
+
+	// Load receipt data
+	heightIndexKey := fmt.Sprintf("/receipts/%d/%d", height, index)
+	receiptData, err := kv.Get([]byte(heightIndexKey))
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to load receipt data: %w", err)
+	}
+
+	// Deserialize receipt
+	receipt, err := FromJSON(receiptData)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("failed to deserialize receipt: %w", err)
+	}
+
+	return receipt, height, index, nil
+}
+
+// LoadReceiptByHeightIndex loads a receipt by block height and transaction index
+func LoadReceiptByHeightIndex(kv KVStore, height uint64, index int) (*Receipt, error) {
+	heightIndexKey := fmt.Sprintf("/receipts/%d/%d", height, index)
+	receiptData, err := kv.Get([]byte(heightIndexKey))
+	if err != nil {
+		return nil, fmt.Errorf("receipt not found for height %d, index %d: %w", height, index, err)
+	}
+
+	receipt, err := FromJSON(receiptData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize receipt: %w", err)
+	}
+
+	return receipt, nil
+}
+
+// DeleteReceipt removes a receipt from storage
+func DeleteReceipt(kv KVStore, height uint64, index int, hash [32]byte) error {
+	// Delete primary storage
+	heightIndexKey := fmt.Sprintf("/receipts/%d/%d", height, index)
+	if err := kv.Delete([]byte(heightIndexKey)); err != nil {
+		return fmt.Errorf("failed to delete receipt data: %w", err)
+	}
+
+	// Delete hash index
+	hashHex := hex.EncodeToString(hash[:])
+	hashKey := fmt.Sprintf("/receipts/hash/%s", hashHex)
+	if err := kv.Delete([]byte(hashKey)); err != nil {
+		return fmt.Errorf("failed to delete receipt hash index: %w", err)
+	}
+
+	return nil
+}
+
+// ListReceiptsByHeight returns all receipts for a given block height
+func ListReceiptsByHeight(kv KVStore, height uint64) ([]*Receipt, error) {
+	var receipts []*Receipt
+	prefix := fmt.Sprintf("/receipts/%d/", height)
+
+	err := kv.Iterate(func(key, value []byte) error {
+		keyStr := string(key)
+		if len(keyStr) >= len(prefix) && keyStr[:len(prefix)] == prefix {
+			receipt, err := FromJSON(value)
+			if err != nil {
+				return fmt.Errorf("failed to deserialize receipt at key %s: %w", keyStr, err)
+			}
+			receipts = append(receipts, receipt)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to iterate receipts for height %d: %w", height, err)
+	}
+
+	return receipts, nil
 }
