@@ -1,0 +1,42 @@
+# Docker configuration for Accumen services
+# This config is mounted into containers and optimized for Docker Compose environments
+
+# L0 Accumulate network endpoints (using container service names)
+l0:
+  source: static
+  static:
+    endpoints:
+      - http://accumulate-devnet:8080
+
+# Bridge configuration for L0 integration
+bridge:
+  enableBridge: true
+  client:
+    serverURL: "http://accumulate-devnet:8080"
+
+# Optimized for development/testing
+blockTime: "2s"
+maxTransactions: 100
+
+# Storage configuration
+storage:
+  backend: badger
+  path: /data
+
+# Logging
+logging:
+  level: info
+  format: json
+
+# DN paths for metadata storage
+dnPaths:
+  metadata: "acc://accumen-metadata.acme"
+  anchors: "acc://accumen-anchors.acme"
+
+# Metrics
+metrics:
+  addr: ":8081"
+
+# Server configuration
+server:
+  addr: ":8666"

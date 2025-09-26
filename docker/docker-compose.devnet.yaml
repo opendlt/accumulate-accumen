@@ -1,0 +1,86 @@
+version: '3.8'
+
+networks:
+  accumulate-devnet:
+    driver: bridge
+
+services:
+  accumulate-devnet:
+    image: accumulatenetwork/accumulated:latest
+    container_name: accumulate-devnet
+    command: [
+      "accumulated", "run", "devnet",
+      "--bvn-count", "3",
+      "--validator-count", "3",
+      "--followers", "1",
+      "--consensus", "tendermint",
+      "--globals", "network=devnet"
+    ]
+    ports:
+      - "26656:26656"   # Tendermint P2P
+      - "26657:26657"   # Tendermint RPC
+      - "8080:8080"     # Accumulate API
+    networks:
+      - accumulate-devnet
+    volumes:
+      - accumulate-data:/root/.accumulate
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  accumen:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.accumen
+    container_name: accumen-sequencer
+    command: [
+      "/accumen",
+      "--role=sequencer",
+      "--config=/config/docker.yaml",
+      "--rpc=:8666"
+    ]
+    ports:
+      - "8666:8666"
+    networks:
+      - accumulate-devnet
+    volumes:
+      - ./config:/config:ro
+      - accumen-data:/data
+    depends_on:
+      accumulate-devnet:
+        condition: service_healthy
+    environment:
+      - ACCUMEN_ACCUMULATE_RPC=http://accumulate-devnet:8080
+
+  follower:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.follower
+    container_name: accumen-follower
+    command: [
+      "/accumen",
+      "--role=follower",
+      "--config=/config/docker.yaml",
+      "--rpc=:8666"
+    ]
+    ports:
+      - "8667:8666"
+    networks:
+      - accumulate-devnet
+    volumes:
+      - ./config:/config:ro
+      - follower-data:/data
+    depends_on:
+      accumen:
+        condition: service_started
+    environment:
+      - ACCUMEN_ACCUMULATE_RPC=http://accumulate-devnet:8080
+      - ACCUMEN_SEQUENCER_RPC=http://accumen:8666
+
+volumes:
+  accumulate-data:
+  accumen-data:
+  follower-data:
