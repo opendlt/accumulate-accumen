@@ -1,4 +1,4 @@
-.PHONY: build test run-sequencer proto json clean run-sim
+.PHONY: build test run-sequencer proto json clean run-sim snapshot-export snapshot-import snapshot-list
 
 # Go build settings
 GOCMD=go
@@ -53,6 +53,25 @@ json:
 
 # Generate both proto and json
 generate: proto json
+
+# Export snapshot
+snapshot-export:
+	@echo "Exporting snapshot..."
+	$(GOBUILD) -o $(BINARY_PATH) ./cmd/accucli
+	./bin/accumen snapshot export --out ./snapshots/manual-export-$(shell powershell -Command "Get-Date -Format 'yyyy-MM-dd-HHmmss'").snap
+
+# Import snapshot
+snapshot-import:
+	@echo "Importing snapshot..."
+	$(GOBUILD) -o $(BINARY_PATH) ./cmd/accucli
+	@if [ -z "$(FILE)" ]; then echo "Usage: make snapshot-import FILE=path/to/snapshot.snap"; exit 1; fi
+	./bin/accumen snapshot import --in $(FILE)
+
+# List snapshots
+snapshot-list:
+	@echo "Listing snapshots..."
+	$(GOBUILD) -o $(BINARY_PATH) ./cmd/accucli
+	./bin/accumen snapshot list
 
 # Integration tests
 test-integration:
@@ -120,4 +139,7 @@ help:
 	@echo "  lint               Run linter"
 	@echo "  install-tools      Install development tools"
 	@echo "  dev                Build and run sequencer"
+	@echo "  snapshot-export    Export current state to snapshot"
+	@echo "  snapshot-import    Import state from snapshot (FILE=path required)"
+	@echo "  snapshot-list      List available snapshots"
 	@echo "  help               Show this help message"
