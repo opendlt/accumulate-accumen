@@ -140,6 +140,31 @@ type DeployContractResult struct {
 	WasmHash string `json:"wasm_hash"`
 }
 
+// UpgradeContractParams represents parameters for accumen.upgradeContract()
+type UpgradeContractParams struct {
+	Addr        string                 `json:"addr"`
+	WasmB64     string                 `json:"wasm_b64"`
+	MigrateEntry *string               `json:"migrate_entry,omitempty"`
+	MigrateArgs  map[string]interface{} `json:"migrate_args,omitempty"`
+}
+
+// UpgradeContractResult represents the result of accumen.upgradeContract()
+type UpgradeContractResult struct {
+	Version  int    `json:"version"`
+	WasmHash string `json:"wasm_hash"`
+}
+
+// ActivateVersionParams represents parameters for accumen.activateVersion()
+type ActivateVersionParams struct {
+	Addr    string `json:"addr"`
+	Version int    `json:"version"`
+}
+
+// ActivateVersionResult represents the result of accumen.activateVersion()
+type ActivateVersionResult struct {
+	Success bool `json:"success"`
+}
+
 // SimulateParams represents parameters for accumen.simulate()
 type SimulateParams struct {
 	Contract string                 `json:"contract"`
@@ -296,6 +321,18 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			err = &RPCError{Code: -32601, Message: "Method not available in read-only mode"}
 		} else {
 			result, err = s.handleDeployContract(req.Params)
+		}
+	case "accumen.upgradeContract":
+		if s.readOnly {
+			err = &RPCError{Code: -32601, Message: "Method not available in read-only mode"}
+		} else {
+			result, err = s.handleUpgradeContract(req.Params)
+		}
+	case "accumen.activateVersion":
+		if s.readOnly {
+			err = &RPCError{Code: -32601, Message: "Method not available in read-only mode"}
+		} else {
+			result, err = s.handleActivateVersion(req.Params)
 		}
 	case "accumen.getL1Receipt":
 		result, err = s.handleGetL1Receipt(req.Params)
@@ -785,6 +822,153 @@ func (s *Server) handleDeployContract(params interface{}) (interface{}, *RPCErro
 	// Return the WASM hash
 	result := &DeployContractResult{
 		WasmHash: hex.EncodeToString(hash[:]),
+	}
+
+	return result, nil
+}
+
+// handleUpgradeContract handles accumen.upgradeContract() method
+func (s *Server) handleUpgradeContract(params interface{}) (interface{}, *RPCError) {
+	if s.contractStore == nil {
+		return nil, &RPCError{Code: -32603, Message: "Contract store not available"}
+	}
+
+	// Parse parameters
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+	}
+
+	var upgradeParams UpgradeContractParams
+	if err := json.Unmarshal(paramsBytes, &upgradeParams); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
+	}
+
+	// Validate required fields
+	if upgradeParams.Addr == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: addr"}
+	}
+	if upgradeParams.WasmB64 == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: wasm_b64"}
+	}
+
+	// Validate address format
+	if !strings.HasPrefix(upgradeParams.Addr, "acc://") {
+		return nil, &RPCError{Code: -32602, Message: "Invalid address format, must start with 'acc://'"}
+	}
+
+	// Check L0 authority permission if sequencer is available
+	if s.sequencer != nil {
+		engine := s.sequencer.GetExecutionEngine()
+		if engine != nil {
+			ctx := context.Background()
+			if err := engine.ValidateNamespacePermission(ctx, upgradeParams.Addr); err != nil {
+				return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("L0 authority validation failed: %v", err)}
+			}
+		}
+	}
+
+	// Decode WASM bytecode from base64
+	wasmBytes, err := base64.StdEncoding.DecodeString(upgradeParams.WasmB64)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid base64 WASM data"}
+	}
+
+	// Validate size limits (1-2 MB)
+	const minSize = 1024        // 1 KB minimum
+	const maxSize = 2 * 1024 * 1024 // 2 MB maximum
+	if len(wasmBytes) < minSize {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM module too small: %d bytes (min: %d)", len(wasmBytes), minSize)}
+	}
+	if len(wasmBytes) > maxSize {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM module too large: %d bytes (max: %d)", len(wasmBytes), maxSize)}
+	}
+
+	// Comprehensive WASM audit for determinism
+	auditReport := runtime.AuditWASMModule(wasmBytes)
+	if !auditReport.Ok {
+		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM audit failed: %s", strings.Join(auditReport.Reasons, "; "))}
+	}
+
+	// Save new version
+	version, hash, err := s.contractStore.SaveVersion(upgradeParams.Addr, wasmBytes)
+	if err != nil {
+		return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Failed to save contract version: %v", err)}
+	}
+
+	// Execute migration if specified
+	if upgradeParams.MigrateEntry != nil && *upgradeParams.MigrateEntry != "" {
+		if s.sequencer != nil {
+			engine := s.sequencer.GetExecutionEngine()
+			if engine != nil {
+				// Execute migration in Execute mode
+				ctx := context.Background()
+				if err := engine.ExecuteMigration(ctx, upgradeParams.Addr, version, *upgradeParams.MigrateEntry, upgradeParams.MigrateArgs); err != nil {
+					// Migration failed - the engine should handle rollback
+					return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Migration failed: %v", err)}
+				}
+			}
+		}
+	}
+
+	// Return the version and hash
+	result := &UpgradeContractResult{
+		Version:  version,
+		WasmHash: hex.EncodeToString(hash[:]),
+	}
+
+	return result, nil
+}
+
+// handleActivateVersion handles accumen.activateVersion() method
+func (s *Server) handleActivateVersion(params interface{}) (interface{}, *RPCError) {
+	if s.contractStore == nil {
+		return nil, &RPCError{Code: -32603, Message: "Contract store not available"}
+	}
+
+	// Parse parameters
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+	}
+
+	var activateParams ActivateVersionParams
+	if err := json.Unmarshal(paramsBytes, &activateParams); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
+	}
+
+	// Validate required fields
+	if activateParams.Addr == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: addr"}
+	}
+	if activateParams.Version <= 0 {
+		return nil, &RPCError{Code: -32602, Message: "Missing or invalid field: version must be > 0"}
+	}
+
+	// Validate address format
+	if !strings.HasPrefix(activateParams.Addr, "acc://") {
+		return nil, &RPCError{Code: -32602, Message: "Invalid address format, must start with 'acc://'"}
+	}
+
+	// Check L0 authority permission if sequencer is available
+	if s.sequencer != nil {
+		engine := s.sequencer.GetExecutionEngine()
+		if engine != nil {
+			ctx := context.Background()
+			if err := engine.ValidateNamespacePermission(ctx, activateParams.Addr); err != nil {
+				return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("L0 authority validation failed: %v", err)}
+			}
+		}
+	}
+
+	// Activate the version
+	if err := s.contractStore.ActivateVersion(activateParams.Addr, activateParams.Version); err != nil {
+		return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("Failed to activate version: %v", err)}
+	}
+
+	// Return success
+	result := &ActivateVersionResult{
+		Success: true,
 	}
 
 	return result, nil
