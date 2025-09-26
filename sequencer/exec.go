@@ -1050,3 +1050,194 @@ func (e *ExecutionEngine) calculateL0Costs(stagedOps []*runtime.StagedOp) (uint6
 	return totalCredits, totalBytes
 }
 
+// ExecuteMigration executes a migration function for a contract upgrade
+func (e *ExecutionEngine) ExecuteMigration(ctx context.Context, contractAddr string, version int, migrateEntry string, migrateArgs map[string]interface{}) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Check if contract store is available
+	if e.contractStore == nil {
+		return fmt.Errorf("contract store not available")
+	}
+
+	// Get the specific version's WASM module
+	wasmBytes, wasmHash, err := e.contractStore.GetVersionModule(contractAddr, version)
+	if err != nil {
+		return fmt.Errorf("failed to get contract version %d: %w", version, err)
+	}
+
+	// Create a state snapshot for rollback if migration fails
+	snapshot, err := e.createStateSnapshot()
+	if err != nil {
+		return fmt.Errorf("failed to create state snapshot: %w", err)
+	}
+
+	// Attempt migration execution
+	migrationErr := e.executeMigrationTransaction(ctx, contractAddr, wasmBytes, wasmHash, migrateEntry, migrateArgs)
+
+	if migrationErr != nil {
+		// Migration failed - restore state from snapshot
+		if restoreErr := e.restoreStateSnapshot(snapshot); restoreErr != nil {
+			return fmt.Errorf("migration failed and state restore failed: migration=%v, restore=%v", migrationErr, restoreErr)
+		}
+		return fmt.Errorf("migration execution failed: %w", migrationErr)
+	}
+
+	// Migration succeeded - activate the new version
+	if err := e.contractStore.ActivateVersion(contractAddr, version); err != nil {
+		// Activation failed - restore state from snapshot
+		if restoreErr := e.restoreStateSnapshot(snapshot); restoreErr != nil {
+			return fmt.Errorf("version activation failed and state restore failed: activation=%v, restore=%v", err, restoreErr)
+		}
+		return fmt.Errorf("failed to activate version %d: %w", version, err)
+	}
+
+	return nil
+}
+
+// executeMigrationTransaction executes the migration function in Execute mode
+func (e *ExecutionEngine) executeMigrationTransaction(ctx context.Context, contractAddr string, wasmBytes []byte, wasmHash [32]byte, migrateEntry string, migrateArgs map[string]interface{}) error {
+	// Create runtime instance with full state access
+	runtimeInst, err := runtime.NewRuntime(&e.config.Runtime)
+	if err != nil {
+		return fmt.Errorf("failed to create runtime instance: %w", err)
+	}
+	defer runtimeInst.Close(ctx)
+
+	// Load the WASM module
+	if err := runtimeInst.LoadModule(ctx, wasmBytes); err != nil {
+		return fmt.Errorf("failed to load WASM module: %w", err)
+	}
+
+	// Set up execution context with full state access
+	execCtx := &runtime.ExecutionContext{
+		KVStore:       e.kvStore,
+		ContractAddr:  contractAddr,
+		Caller:        "system", // System-initiated migration
+		GasLimit:      e.config.MaxGasPerTx,
+		BlockHeight:   e.GetCurrentHeight(),
+		BlockTime:     time.Now().Unix(),
+		Mode:          runtime.ModeExecute, // Full execution mode for migration
+	}
+
+	// Execute the migration function
+	result, err := runtimeInst.Execute(ctx, execCtx, migrateEntry, migrateArgs)
+	if err != nil {
+		return fmt.Errorf("migration function execution failed: %w", err)
+	}
+
+	if !result.Success {
+		return fmt.Errorf("migration function returned error: %s", result.Error)
+	}
+
+	// Process staged operations (state changes, events, etc.)
+	if err := e.processStagedOperations(ctx, execCtx, result.StagedOps); err != nil {
+		return fmt.Errorf("failed to process migration staged operations: %w", err)
+	}
+
+	return nil
+}
+
+// createStateSnapshot creates a snapshot of the current state for rollback
+func (e *ExecutionEngine) createStateSnapshot() (map[string][]byte, error) {
+	snapshot := make(map[string][]byte)
+
+	// Create iterator for all keys
+	iter, err := e.kvStore.Iterator("")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create state iterator: %w", err)
+	}
+	defer iter.Close()
+
+	// Copy all state data
+	for iter.Valid() {
+		key, err := iter.Key()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get iterator key: %w", err)
+		}
+
+		value, err := iter.Value()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get iterator value: %w", err)
+		}
+
+		// Make a copy of the value
+		valueCopy := make([]byte, len(value))
+		copy(valueCopy, value)
+		snapshot[string(key)] = valueCopy
+
+		iter.Next()
+	}
+
+	return snapshot, nil
+}
+
+// restoreStateSnapshot restores state from a snapshot
+func (e *ExecutionEngine) restoreStateSnapshot(snapshot map[string][]byte) error {
+	// Clear current state
+	iter, err := e.kvStore.Iterator("")
+	if err != nil {
+		return fmt.Errorf("failed to create state iterator for restore: %w", err)
+	}
+
+	var keysToDelete []string
+	for iter.Valid() {
+		key, err := iter.Key()
+		if err != nil {
+			iter.Close()
+			return fmt.Errorf("failed to get iterator key during restore: %w", err)
+		}
+		keysToDelete = append(keysToDelete, string(key))
+		iter.Next()
+	}
+	iter.Close()
+
+	// Delete all current keys
+	for _, key := range keysToDelete {
+		if err := e.kvStore.Delete(key); err != nil {
+			return fmt.Errorf("failed to delete key %s during restore: %w", key, err)
+		}
+	}
+
+	// Restore snapshot data
+	for key, value := range snapshot {
+		if err := e.kvStore.Put(key, value); err != nil {
+			return fmt.Errorf("failed to restore key %s: %w", key, err)
+		}
+	}
+
+	return nil
+}
+
+// processStagedOperations processes the staged operations from migration execution
+func (e *ExecutionEngine) processStagedOperations(ctx context.Context, execCtx *runtime.ExecutionContext, stagedOps []*runtime.StagedOp) error {
+	for _, op := range stagedOps {
+		switch op.Type {
+		case "put", "writeData":
+			if op.Key == "" {
+				return fmt.Errorf("staged operation missing key")
+			}
+			if err := e.kvStore.Put(op.Key, op.Data); err != nil {
+				return fmt.Errorf("failed to execute put operation for key %s: %w", op.Key, err)
+			}
+
+		case "delete":
+			if op.Key == "" {
+				return fmt.Errorf("staged delete operation missing key")
+			}
+			if err := e.kvStore.Delete(op.Key); err != nil {
+				return fmt.Errorf("failed to execute delete operation for key %s: %w", op.Key, err)
+			}
+
+		case "emit_event":
+			// Migration events are processed but not stored persistently
+			// They are mainly for debugging and logging purposes
+
+		default:
+			return fmt.Errorf("unsupported staged operation type in migration: %s", op.Type)
+		}
+	}
+
+	return nil
+}
+
