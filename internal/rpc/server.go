@@ -275,6 +275,8 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		} else {
 			result, err = s.handleDeployContract(req.Params)
 		}
+	case "accumen.getL1Receipt":
+		result, err = s.handleGetL1Receipt(req.Params)
 	default:
 		err = &RPCError{Code: -32601, Message: "Method not found"}
 	}
@@ -577,6 +579,22 @@ type GetTxParams struct {
 	TxHash string `json:"txHash"`
 }
 
+// GetL1ReceiptParams represents parameters for accumen.getL1Receipt()
+type GetL1ReceiptParams struct {
+	Hash string `json:"hash"`
+}
+
+// GetL1ReceiptResult represents the result of accumen.getL1Receipt()
+type GetL1ReceiptResult struct {
+	L1Hash      string                    `json:"l1Hash"`
+	DNTxID      string                    `json:"dnTxId"` // hex-encoded DN transaction ID
+	DNKey       string                    `json:"dnKey,omitempty"`
+	Contract    string                    `json:"contract,omitempty"`
+	Entry       string                    `json:"entry,omitempty"`
+	Metadata    *indexer.MetadataEntry    `json:"metadata,omitempty"`
+	AnchorTxIDs []string                  `json:"anchorTxIds,omitempty"` // hex-encoded anchor tx IDs
+}
+
 // handleGetTx handles accumen.getTx() method
 func (s *Server) handleGetTx(params interface{}) (interface{}, *RPCError) {
 	// Parse parameters
@@ -701,6 +719,109 @@ func (s *Server) handleDeployContract(params interface{}) (interface{}, *RPCErro
 	}
 
 	return result, nil
+}
+
+// handleGetL1Receipt handles accumen.getL1Receipt() method
+func (s *Server) handleGetL1Receipt(params interface{}) (interface{}, *RPCError) {
+	// Parse parameters
+	paramsBytes, err := json.Marshal(params)
+	if err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params"}
+	}
+
+	var receiptParams GetL1ReceiptParams
+	if err := json.Unmarshal(paramsBytes, &receiptParams); err != nil {
+		return nil, &RPCError{Code: -32602, Message: "Invalid params structure"}
+	}
+
+	// Validate required fields
+	if receiptParams.Hash == "" {
+		return nil, &RPCError{Code: -32602, Message: "Missing required field: hash"}
+	}
+
+	// Check if we have an indexer (for followers) or fallback to direct lookup
+	if s.indexer != nil {
+		// Query L1 receipt from indexer
+		receipt, err := s.indexer.GetL1Receipt(receiptParams.Hash)
+		if err != nil {
+			return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("L1 receipt not found: %v", err)}
+		}
+
+		// Convert to RPC result format
+		result := &GetL1ReceiptResult{
+			L1Hash:   receipt.L1Hash,
+			DNTxID:   hex.EncodeToString(receipt.DNTxID),
+			DNKey:    receipt.DNKey,
+			Contract: receipt.Contract,
+			Entry:    receipt.Entry,
+			Metadata: receipt.Metadata,
+		}
+
+		// Convert anchor TX IDs to hex strings
+		for _, anchorTxID := range receipt.AnchorTxIDs {
+			result.AnchorTxIDs = append(result.AnchorTxIDs, hex.EncodeToString(anchorTxID))
+		}
+
+		return result, nil
+	}
+
+	// Fallback: Try to find receipt info from stored transaction data (sequencer mode)
+	// Look for transaction with L1 hash in various formats
+	possibleKeys := []string{
+		fmt.Sprintf("tx:%s", receiptParams.Hash),
+		fmt.Sprintf("l1_receipt:%s", receiptParams.Hash),
+		fmt.Sprintf("l1:%s", receiptParams.Hash),
+	}
+
+	for _, key := range possibleKeys {
+		data, err := s.kvStore.Get([]byte(key))
+		if err != nil {
+			continue // Try next key format
+		}
+
+		// Try to parse as MetadataEntry first
+		var metadata indexer.MetadataEntry
+		if err := json.Unmarshal(data, &metadata); err == nil && metadata.L1Hash == receiptParams.Hash {
+			result := &GetL1ReceiptResult{
+				L1Hash:   metadata.L1Hash,
+				DNTxID:   hex.EncodeToString(metadata.DNTxID),
+				DNKey:    metadata.DNKey,
+				Contract: metadata.ContractAddr,
+				Entry:    metadata.Entry,
+				Metadata: &metadata,
+			}
+			return result, nil
+		}
+
+		// Try to parse as raw receipt data
+		var receiptData map[string]interface{}
+		if err := json.Unmarshal(data, &receiptData); err == nil {
+			if hash, ok := receiptData["l1Hash"].(string); ok && hash == receiptParams.Hash {
+				result := &GetL1ReceiptResult{
+					L1Hash: hash,
+				}
+
+				// Extract optional fields
+				if dnTxID, ok := receiptData["dnTxId"].(string); ok {
+					result.DNTxID = dnTxID
+				}
+				if dnKey, ok := receiptData["dnKey"].(string); ok {
+					result.DNKey = dnKey
+				}
+				if contract, ok := receiptData["contract"].(string); ok {
+					result.Contract = contract
+				}
+				if entry, ok := receiptData["entry"].(string); ok {
+					result.Entry = entry
+				}
+
+				return result, nil
+			}
+		}
+	}
+
+	// L1 receipt not found
+	return nil, &RPCError{Code: -32603, Message: fmt.Sprintf("L1 receipt not found for hash: %s", receiptParams.Hash)}
 }
 
 // generateTxID generates a unique transaction ID
