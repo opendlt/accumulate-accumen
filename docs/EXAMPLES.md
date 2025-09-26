@@ -1,198 +1,258 @@
-# Accumen CLI Examples
+# Accumen Examples
 
-This guide shows how to use the Accumen CLI for local development, from building and deploying contracts to interacting with them and monitoring DN metadata writes.
+This document provides a complete walkthrough of deploying and interacting with Accumen contracts, demonstrating the security and economics model where L0 owns the keys and credits come from burning ACME tokens.
 
 ## Prerequisites
 
-- Rust toolchain for WASM compilation
-- Accumen sequencer running locally
-- `accucli` binary built and available
+- Go 1.21+ installed
+- Accumulate CLI (`accucli`) built and available
+- Access to Accumulate devnet or simulator
 
-## Generate a Dev Key and Configure Signer
+## Complete Walkthrough
 
-Before running the sequencer or interacting with contracts, you'll need to generate Ed25519 keys for signing transactions and configuring the signer.
+### 1. Generate Key
 
-### Generate Keys
-
-Use the accucli tool to generate a new Ed25519 key pair:
+First, generate a new key pair for signing transactions:
 
 ```bash
-# Build accucli if not already built
-go build -o bin/accucli ./cmd/accucli
-
-# Generate new Ed25519 key pair
-./bin/accucli keys gen
+accucli keys gen --key-type ed25519 --output my-key.json
 ```
 
-**Expected output:**
+This creates a new Ed25519 key pair and saves it to `my-key.json`. The key will be used to sign all subsequent transactions.
+
+### 2. Create ADI/Book/Page on Devnet
+
+Start the devnet environment:
+
+```bash
+# Using devnet scripts
+./ops/devnet-up.sh
+
+# Or using simulator
+go run ./cmd/simulator
+```
+
+Create an Accumulate Digital Identity (ADI) with associated key book and page:
+
+```bash
+# Create ADI
+accucli adi create \
+  --url http://localhost:16695/v3 \
+  --sponsor acc://dn.acme/ACME \
+  --key-file my-key.json \
+  my-identity
+
+# Create key book
+accucli page create \
+  --url http://localhost:16695/v3 \
+  --sponsor acc://my-identity \
+  --key-file my-key.json \
+  acc://my-identity/book
+
+# Create key page
+accucli page create \
+  --url http://localhost:16695/v3 \
+  --sponsor acc://my-identity/book \
+  --key-file my-key.json \
+  acc://my-identity/book/1
+
+# Add key to page
+accucli key add \
+  --url http://localhost:16695/v3 \
+  --sponsor acc://my-identity/book/1 \
+  --key-file my-key.json \
+  --public-key $(accucli keys export my-key.json --public)
+```
+
+### 3. Bind Contract to Key Page
+
+Create authority binding to link your contract with the key page:
+
+```bash
+accucli authority bind \
+  --url http://localhost:16695/v3 \
+  --sponsor acc://my-identity/book/1 \
+  --key-file my-key.json \
+  --contract-address 0x1234567890123456789012345678901234567890 \
+  --authority acc://my-identity/book/1 \
+  --scope-file authority-scope.yaml
+```
+
+Example `authority-scope.yaml`:
+
+```yaml
+authority_binding:
+  contract_address: "0x1234567890123456789012345678901234567890"
+  key_page_url: "acc://my-identity/book/1"
+  permissions:
+    - action: "deploy"
+      rate_limit: 10
+    - action: "submit"
+      rate_limit: 100
+    - action: "query"
+      rate_limit: 1000
+  emergency_controls:
+    pause_contract: true
+    revoke_authority: true
+```
+
+### 4. Ensure Credits
+
+Check current credit balance and add credits if needed:
+
+```bash
+# Check credit status
+accucli credits status \
+  --url http://localhost:16695/v3 \
+  acc://my-identity/book/1
+
+# Add credits by burning ACME tokens
+accucli credits add \
+  --url http://localhost:16695/v3 \
+  --sponsor acc://dn.acme/ACME \
+  --key-file my-key.json \
+  --recipient acc://my-identity/book/1 \
+  --amount 1000000  # 1 ACME = 1,000,000 credits
+```
+
+This demonstrates the economics model: credits are obtained by burning ACME tokens through the AddCredits transaction flow.
+
+### 5. Deploy + Submit + Query
+
+Deploy your Accumen contract:
+
+```bash
+# Deploy contract
+accucli contract deploy \
+  --url http://localhost:16695/v3 \
+  --sponsor acc://my-identity/book/1 \
+  --key-file my-key.json \
+  --contract-file ./examples/counter/counter.wasm \
+  --init-data '{"initial_count": 0}'
+
+# Submit transaction to contract
+accucli contract submit \
+  --url http://localhost:16695/v3 \
+  --sponsor acc://my-identity/book/1 \
+  --key-file my-key.json \
+  --contract-address 0x1234567890123456789012345678901234567890 \
+  --method increment \
+  --params '{"amount": 1}'
+
+# Query contract state
+accucli contract query \
+  --url http://localhost:16695/v3 \
+  --contract-address 0x1234567890123456789012345678901234567890 \
+  --method get_count
+```
+
+### 6. Verify DN Write and Follower Receipt
+
+#### DN Write Verification
+
+Each L1 transaction creates a cross-link entry in the L0 Directory Network:
+
+```bash
+# Query DN for cross-link metadata
+accucli tx query \
+  --url http://localhost:16695/v3 \
+  --tx-id <l0-transaction-id> \
+  --include-metadata
+
+# Verify cross-link format
+accucli cross-link verify \
+  --l1-tx-hash 0xabcdef1234567890... \
+  --l0-tx-id <l0-transaction-id>
+```
+
+Expected cross-link format in L0 transaction memo:
+
 ```json
 {
-  "public_key": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
-  "private_key": "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
-  "note": "Store the private key securely. It will not be shown again."
+  "cross_links": [
+    {
+      "l1_chain_id": "acumen-l1",
+      "l1_tx_hash": "0xabcdef1234567890...",
+      "l1_block_number": 12345,
+      "contract_address": "0x1234567890123456789012345678901234567890",
+      "method": "increment",
+      "timestamp": "2024-01-15T10:30:00Z"
+    }
+  ]
 }
 ```
 
-**Important:** Save the private key securely. You'll need it to configure the signer and for signing transactions.
+#### Follower Receipt Verification
 
-### Save Key to File
-
-Save the private key to a secure file:
+Followers can reconstruct and verify the transaction chain:
 
 ```bash
-# Save private key to a file with secure permissions (0600)
-./bin/accucli keys save \
-  --file ~/.accumen/dev-key.hex \
-  --priv b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef123456
+# Scan DN for receipts
+accucli follower scan \
+  --url http://localhost:16695/v3 \
+  --start-block 100 \
+  --end-block 200 \
+  --contract-filter 0x1234567890123456789012345678901234567890
 
-# Create directory first if it doesn't exist
-mkdir -p ~/.accumen
+# Verify receipt chain
+accucli follower verify \
+  --receipt-file receipts.json \
+  --state-root 0x9876543210... \
+  --contract-address 0x1234567890123456789012345678901234567890
 ```
 
-**Expected output:**
+Receipt verification process:
+
+1. **Receipt Collection**: Follower scans DN for cross-link entries
+2. **State Reconstruction**: Rebuilds contract state from transaction sequence
+3. **Cryptographic Verification**: Validates signatures and merkle proofs
+4. **Consensus Validation**: Confirms transactions were included in valid blocks
+
+Example receipt structure:
+
 ```json
 {
-  "success": true,
-  "file": "/home/user/.accumen/dev-key.hex",
-  "permissions": "0600 (owner read/write only)",
-  "note": "Key saved securely. Verify file permissions on your system."
+  "receipt_id": "receipt_12345",
+  "l0_transaction": {
+    "id": "<l0-tx-id>",
+    "block_height": 150,
+    "merkle_proof": "0x...",
+    "validator_signatures": ["0x...", "0x..."]
+  },
+  "l1_cross_link": {
+    "chain_id": "acumen-l1",
+    "tx_hash": "0xabcdef...",
+    "block_number": 12345,
+    "contract_state_root": "0x9876543210..."
+  },
+  "verification_status": "valid"
 }
 ```
 
-### Display Key from File
+## Security Model Summary
 
-Verify the saved key:
+This walkthrough demonstrates Accumen's security model:
 
-```bash
-# Display the key from the saved file
-./bin/accucli keys show --file ~/.accumen/dev-key.hex
-```
+1. **L0 Root of Trust**: All authority derives from Accumulate identity system
+2. **Authority Chain**: Contract → Key Page → Signer → Permissions
+3. **Cryptographic Binding**: Contract addresses bound to specific key pages
+4. **Permission Scoping**: Granular controls over contract operations
+5. **Cross-Link Integrity**: L1 transactions anchored in L0 for verifiability
 
-**Expected output:**
-```json
-{
-  "file": "/home/user/.accumen/dev-key.hex",
-  "private_key": "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef123456",
-  "public_key": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
-  "warning": "Private key displayed. Ensure terminal output is secure."
-}
-```
+## Economics Model Summary
 
-### Configure Signer in config/local.yaml
+The economics flow shown:
 
-Update your Accumen configuration to use the file-based signer:
+1. **ACME Burning**: AddCredits transactions burn ACME tokens
+2. **Credit Issuance**: Credits issued at gas-to-credits ratio (GCR)
+3. **L1 Gas Conversion**: L1 transaction fees paid in credits to L0
+4. **Resource Management**: Credits provide anti-spam and resource allocation
 
-```yaml
-# config/local.yaml
+This completes the full cycle from key generation through contract deployment, execution, and verification within Accumen's dual-layer architecture.
 
-# Signer configuration
-signer:
-  type: "file"
-  key: "/home/user/.accumen/dev-key.hex"
+## Advanced Examples
 
-# Bridge configuration (if using L0 integration)
-bridge:
-  enableBridge: true
-  client:
-    serverURL: "https://testnet.accumulatenetwork.io/v3"
-    sequencerKey: ""  # Leave empty when using signer config
-
-# Events configuration for transaction confirmations
-events:
-  enable: true
-  reconnectMin: "1s"
-  reconnectMax: "30s"
-
-# Other sequencer settings
-blockTime: "2s"
-maxTransactions: 100
-```
-
-### Alternative Signer Configurations
-
-#### Environment Variable Signer
-
-If you prefer to use environment variables:
-
-```bash
-# Set the private key in an environment variable
-export ACCUMEN_PRIVATE_KEY="b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef123456"
-```
-
-Update config/local.yaml:
-```yaml
-signer:
-  type: "env"
-  key: "ACCUMEN_PRIVATE_KEY"
-```
-
-#### Development Signer (Insecure)
-
-For local development only (not production):
-
-```yaml
-signer:
-  type: "dev"
-  key: ""  # Uses default dev key, or specify a custom hex key
-```
-
-Or with a custom development key:
-```yaml
-signer:
-  type: "dev"
-  key: "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456a1b2c3d4e5f6789012345678901234567890abcdef123456"
-```
-
-### Verify Configuration
-
-Start the sequencer with your key configuration:
-
-```bash
-# Start sequencer with configured signer
-go run ./cmd/accumen \
-  --role=sequencer \
-  --config=config/local.yaml \
-  --rpc=:8666 \
-  --log-level=info
-```
-
-You should see output indicating the signer is properly configured:
-```
-INFO[2024-01-15T10:30:00Z] Signer configured: type=file, path=/home/user/.accumen/dev-key.hex
-INFO[2024-01-15T10:30:00Z] Starting Accumen sequencer
-INFO[2024-01-15T10:30:00Z] RPC server started on :8666
-```
-
-### Security Best Practices
-
-1. **File Permissions**: Ensure private key files have restrictive permissions (0600)
-2. **Backup Keys**: Keep secure backups of your private keys
-3. **Environment Separation**: Use different keys for development, staging, and production
-4. **Key Rotation**: Regularly rotate keys in production environments
-5. **Never Commit Keys**: Never commit private keys to version control
-
-### Key Management Commands Reference
-
-```bash
-# Generate new key pair
-./bin/accucli keys gen
-
-# Save private key to file
-./bin/accucli keys save --file <path> --priv <hex-key>
-
-# Display key from file
-./bin/accucli keys show --file <path>
-
-# Help for keys commands
-./bin/accucli keys --help
-./bin/accucli keys gen --help
-./bin/accucli keys save --help
-./bin/accucli keys show --help
-```
-
-## Example Walkthrough
-
-### 1. Build a Rust Contract to WASM
+### Build a Rust Contract to WASM
 
 First, create a simple counter contract in Rust:
 

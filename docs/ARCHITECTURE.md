@@ -98,6 +98,267 @@ Deterministic WASM execution environment:
 - **Type Safety**: Proper parameter and return type handling
 - **Error Handling**: Safe error propagation
 
+## Security Model
+
+### Authority Binding
+
+Accumen's security model is built on the principle that **L0 owns the keys** - all authority derives from Accumulate's identity and key management system.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Authority Chain                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ADI (acc://example.acme)                                      │
+│    │                                                           │
+│    └─► Key Book (acc://example.acme/book)                     │
+│         │                                                      │
+│         └─► Key Page (acc://example.acme/book/1)              │
+│              │                                                 │
+│              └─► Signer (Public Key + Permissions)            │
+│                   │                                            │
+│                   └─► Contract Authority Binding              │
+│                        │                                       │
+│                        └─► L1 Contract (acc://example.acme/contract) │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Authority Binding Process:**
+
+1. **ADI Creation**: Create an Accumulate Digital Identifier on L0
+2. **Key Management**: Establish key books and key pages with public keys
+3. **Contract Binding**: Bind L1 contract addresses to specific key pages
+4. **Permission Verification**: All L1 operations verified against L0 key authority
+
+**Authority Registry (`registry/authority/`):**
+- **Binding Storage**: Maps contract addresses to key books/pages
+- **Permission Cache**: Caches authority scopes for performance
+- **Verification Engine**: Validates operations against L0 authority
+
+**Security Properties:**
+- **L0 Root of Trust**: All authority derives from Accumulate identity system
+- **Non-Repudiation**: Every L1 operation traceable to L0 identity
+- **Decentralized Authority**: No centralized key management required
+- **Hierarchical Permissions**: Supports complex permission structures
+
+### Authority Scope Management
+
+Authority scopes define what operations a contract is permitted to perform:
+
+```yaml
+# Authority Scope Document (stored on DN)
+contract: "acc://example.acme/contract"
+version: 1
+paused: false
+allowed:
+  write_data:
+    - target: "acc://data.acme/*"
+      max_size: 1048576
+      max_per_block: 10
+  send_tokens:
+    - from: "acc://example.acme/tokens"
+      to: "acc://treasury.acme/*"
+      token_url: "acc://ACME"
+      max_amount: 1000000000
+      max_per_block: 5
+  update_auth:
+    - target: "acc://example.acme/book/*"
+      operations: ["add_authority"]
+      max_per_block: 1
+```
+
+**Scope Features:**
+- **Granular Permissions**: Fine-grained control over allowed operations
+- **Rate Limiting**: Per-block operation limits prevent abuse
+- **Emergency Controls**: Pause contracts via scope updates
+- **Versioned Updates**: Atomic scope updates with version bumping
+
+## Economics Model
+
+### Credits Manager
+
+Accumen uses a **dual-token economics model** where L1 gas is converted to L0 Credits through ACME burning:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Credits Flow                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  L1 Transaction (Gas: 50,000)                                 │
+│         │                                                       │
+│         ▼                                                       │
+│  Gas-to-Credits Conversion (GCR: 1000)                        │
+│         │                                                       │
+│         ▼                                                       │
+│  Credits Required: 50 Credits                                  │
+│         │                                                       │
+│         ▼                                                       │
+│  Check Key Page Credit Balance                                  │
+│         │                                                       │
+│         ├─► Sufficient Credits: Execute Transaction            │
+│         │                                                       │
+│         └─► Insufficient Credits: Trigger AddCredits           │
+│                      │                                          │
+│                      ▼                                          │
+│             ACME → Credits Conversion                           │
+│             (Burn ACME, Issue Credits)                         │
+│                      │                                          │
+│                      ▼                                          │
+│             Retry Transaction Execution                         │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Credits Manager (`bridge/pricing/`):**
+
+**Gas-to-Credits Conversion:**
+```go
+type Schedule struct {
+    GCR        float64  // Gas-to-Credits Ratio (e.g., 1000 gas = 1 credit)
+    PerByte    ByteCosts // Read/write costs per byte
+    HostCosts  map[string]uint64 // Host function gas costs
+    BaseGas    uint64   // Minimum gas per transaction
+}
+
+// Convert L1 gas usage to L0 credits
+credits := gasUsed / schedule.GCR
+```
+
+**AddCredits Flow:**
+1. **Credit Check**: Verify key page has sufficient credits
+2. **ACME Calculation**: Determine ACME required for credit top-up
+3. **Token Transfer**: Use configured funding token account
+4. **AddCredits Transaction**: Submit to L0 to burn ACME for credits
+5. **Retry Execution**: Re-execute L1 transaction with credits
+
+**Funding Configuration:**
+```yaml
+credits:
+  minBuffer: 1000     # Maintain minimum 1000 credits
+  target: 5000        # Refill to 5000 credits
+  fundingToken: "acc://example.acme/tokens"  # ACME token account
+```
+
+**Economic Properties:**
+- **Pay-per-Use**: Only pay for actual gas consumption
+- **Automatic Top-up**: Seamless credit management
+- **ACME Burn**: Deflationary pressure on ACME token
+- **Predictable Costs**: Stable gas-to-credit conversion rates
+
+## Cross-Links
+
+Cross-links establish the connection between L1 transactions and their L0 anchored metadata, enabling full auditability and follower synchronization.
+
+### L1 → L0 Cross-Link Process
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 Cross-Link Flow                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. L1 Transaction Execution                                   │
+│     ├─► TxHash: 0xa1b2c3d4...                                  │
+│     ├─► Result: Success                                         │
+│     └─► Metadata: {contract, entry, events, l0Outputs}        │
+│                                                                 │
+│  2. Cross-Link Metadata Generation                             │
+│     ├─► L1Hash: 0xa1b2c3d4... (from step 1)                  │
+│     ├─► Contract: acc://example.acme/contract                  │
+│     ├─► Entry: increment                                        │
+│     └─► Outputs: [WriteData, SendTokens]                       │
+│                                                                 │
+│  3. L0 WriteData Transaction                                   │
+│     ├─► Target: acc://dn.acme/registry/metadata/{hash}        │
+│     ├─► Memo: "crosslink:0xa1b2c3d4..."                       │
+│     ├─► Metadata: {action: "l1_metadata", l1Hash: "0xa1b2c3d4"} │
+│     └─► Data: JSON(metadata)                                   │
+│                                                                 │
+│  4. DN Storage                                                  │
+│     └─► Path: registry/metadata/{block_height}/{tx_index}      │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Cross-Link Format
+
+**L0 Transaction Memo:**
+```
+crosslink:0xa1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456
+```
+
+**L0 Transaction Metadata:**
+```json
+{
+  "action": "l1_metadata",
+  "l1Hash": "0xa1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+  "contract": "acc://example.acme/contract",
+  "entry": "increment",
+  "timestamp": 1640995200
+}
+```
+
+**DN Metadata Document:**
+```json
+{
+  "chainId": "accumen-devnet-1",
+  "blockHeight": 1234,
+  "txIndex": 0,
+  "txHash": "0xa1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+  "time": "2024-01-01T12:00:00Z",
+  "contractAddr": "acc://example.acme/contract",
+  "entry": "increment",
+  "gasUsed": 5000,
+  "creditsL0": 50,
+  "creditsL1": 5,
+  "l0Outputs": [
+    {
+      "type": "WriteData",
+      "target": "acc://data.acme/results",
+      "data": "eyJyZXN1bHQiOiJzdWNjZXNzIn0="
+    }
+  ],
+  "events": [
+    {
+      "type": "counter_incremented",
+      "data": {"old_value": 41, "new_value": 42}
+    }
+  ]
+}
+```
+
+### Follower Receipt Verification
+
+Followers use cross-links to verify and reconstruct L1 state:
+
+1. **DN Scanning**: Scan DN registry paths for metadata entries
+2. **Cross-Link Extraction**: Parse L1 hash from memo field
+3. **Metadata Validation**: Verify metadata integrity and authenticity
+4. **State Reconstruction**: Apply events and L0 outputs in order
+5. **Receipt Generation**: Create L1 receipts linking to DN transactions
+
+**Receipt Structure:**
+```json
+{
+  "l1Hash": "0xa1b2c3d4...",
+  "dnTxId": "0x789abc...",
+  "dnKey": "registry/metadata/1234/0",
+  "contract": "acc://example.acme/contract",
+  "entry": "increment",
+  "metadata": { /* full metadata object */ },
+  "anchorTxIds": ["0xdef456..."],
+  "createdAt": "2024-01-01T12:00:00Z"
+}
+```
+
+### Cross-Link Security Properties
+
+- **Tamper Evidence**: Any modification to L1 metadata breaks cross-link verification
+- **Ordering Guarantees**: DN block height ensures deterministic transaction ordering
+- **Non-Repudiation**: L0 signatures provide cryptographic proof of authenticity
+- **Audit Trail**: Complete transaction history preserved in DN registry
+- **State Verification**: Followers can independently verify L1 state transitions
+
 ### 5. Bridge Layer (`bridge/`)
 
 Connects Accumen to Accumulate L0 network:
