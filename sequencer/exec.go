@@ -931,3 +931,122 @@ func (e *ExecutionEngine) getDefaultAuthorities(account protocol.Account) ([]*ur
 	return []*url.URL{parentADI}, nil
 }
 
+// SimulateResult represents the result of a simulation
+type SimulateResult struct {
+	GasUsed     uint64              `json:"gasUsed"`
+	Events      []*runtime.Event    `json:"events"`
+	StagedOps   []*runtime.StagedOp `json:"stagedOps"`
+	L0Credits   uint64              `json:"l0Credits"`
+	L0Bytes     uint64              `json:"l0Bytes"`
+	Success     bool                `json:"success"`
+	Error       string              `json:"error,omitempty"`
+}
+
+// Simulate executes a contract function simulation without committing state changes
+func (e *ExecutionEngine) Simulate(contract, entry string, args map[string]interface{}) (*SimulateResult, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	result := &SimulateResult{}
+
+	// Check if contract store is available
+	if e.contractStore == nil {
+		result.Success = false
+		result.Error = "contract store not available"
+		return result, nil
+	}
+
+	// Load WASM module for the contract
+	wasmBytes, wasmHash, err := e.contractStore.GetModule(contract)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("contract not found: %s - %v", contract, err)
+		return result, nil
+	}
+
+	// Create temporary state store for simulation
+	tempKVStore := state.NewMemoryKVStore()
+
+	// Copy current state to temporary store (simplified snapshot)
+	// In a real implementation, this would create a proper state snapshot
+
+	// Create temporary runtime for simulation
+	tempRuntime, err := runtime.NewRuntime(&e.config.Runtime)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("failed to create simulation runtime: %v", err)
+		return result, nil
+	}
+	defer tempRuntime.Close(context.Background())
+
+	// Execute contract in simulation mode
+	execResult, err := tempRuntime.ExecuteContract(context.Background(), wasmBytes, wasmHash[:], entry, []uint64{}, tempKVStore)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("simulation execution failed: %v", err)
+		return result, nil
+	}
+
+	// Process execution result
+	result.Success = execResult.Success
+	result.GasUsed = execResult.GasUsed
+	result.Events = execResult.Events
+	result.StagedOps = execResult.StagedOps
+
+	if !execResult.Success && execResult.Error != nil {
+		result.Error = execResult.Error.Error()
+	}
+
+	// Calculate L0 credits and bytes for staged operations
+	if len(execResult.StagedOps) > 0 {
+		result.L0Credits, result.L0Bytes = e.calculateL0Costs(execResult.StagedOps)
+	}
+
+	return result, nil
+}
+
+// calculateL0Costs calculates the estimated L0 credits and bytes for staged operations
+func (e *ExecutionEngine) calculateL0Costs(stagedOps []*runtime.StagedOp) (uint64, uint64) {
+	var totalCredits uint64
+	var totalBytes uint64
+
+	// Base cost for each operation
+	const baseOpCredits = 1000
+	const baseOpBytes = 256
+
+	for _, op := range stagedOps {
+		// Base operation cost
+		totalCredits += baseOpCredits
+		totalBytes += baseOpBytes
+
+		// Calculate additional costs based on operation type and data size
+		switch op.Type {
+		case "write_data", "writeData":
+			if op.Data != nil {
+				dataSize := uint64(len(op.Data))
+				// Credit cost: 10 credits per byte of data
+				totalCredits += dataSize * 10
+				// Byte cost: actual data size plus metadata overhead
+				totalBytes += dataSize + 128 // 128 bytes metadata overhead
+			}
+
+		case "send_tokens", "sendTokens":
+			// Token operations have fixed overhead
+			totalCredits += 5000 // Fixed cost for token transfers
+			totalBytes += 512    // Fixed metadata size for token operations
+
+		case "update_auth", "updateAuth":
+			// Authority updates are expensive
+			totalCredits += 10000 // High cost for security-sensitive operations
+			totalBytes += 1024    // Larger metadata for authority changes
+
+		default:
+			// Unknown operation type, use conservative estimates
+			totalCredits += 2000
+			totalBytes += 512
+		}
+	}
+
+	return totalCredits, totalBytes
+}
+

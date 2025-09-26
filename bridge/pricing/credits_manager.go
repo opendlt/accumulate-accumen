@@ -279,3 +279,62 @@ func (m *Manager) IsHealthy() bool {
 
 	return hasHealthyEndpoint
 }
+
+// QuoteForGas calculates the credit cost and ACME equivalent for a given gas amount
+func QuoteForGas(gas uint64) (credits uint64, acmeDecimal string) {
+	// Use default schedule for standalone function
+	schedule := DefaultSchedule()
+
+	// Calculate credits using the Gas-to-Credits Ratio (GCR)
+	credits = schedule.CalculateCredits(gas)
+
+	// Calculate ACME equivalent using the Credits-to-ACME Rate (CAR)
+	car := schedule.GetCAR()
+	if car == 0 {
+		acmeDecimal = "0.000000"
+		return
+	}
+
+	// ACME = credits / CAR
+	creditsDecimal := new(big.Float).SetUint64(credits)
+	carDecimal := new(big.Float).SetUint64(car)
+
+	acmeFloat := new(big.Float).Quo(creditsDecimal, carDecimal)
+
+	// Format to 6 decimal places for ACME precision
+	acmeDecimal = acmeFloat.Text('f', 6)
+
+	return credits, acmeDecimal
+}
+
+// QuoteForGasWithManager calculates the credit cost and ACME equivalent using this manager's schedule
+func (m *Manager) QuoteForGasWithManager(gas uint64) (credits uint64, acmeDecimal string) {
+	var schedule *Schedule
+	if m.sched != nil {
+		schedule = m.sched.Get()
+	}
+	if schedule == nil {
+		schedule = DefaultSchedule()
+	}
+
+	// Calculate credits using the Gas-to-Credits Ratio (GCR)
+	credits = schedule.CalculateCredits(gas)
+
+	// Calculate ACME equivalent using the Credits-to-ACME Rate (CAR)
+	car := schedule.GetCAR()
+	if car == 0 {
+		acmeDecimal = "0.000000"
+		return
+	}
+
+	// ACME = credits / CAR
+	creditsDecimal := new(big.Float).SetUint64(credits)
+	carDecimal := new(big.Float).SetUint64(car)
+
+	acmeFloat := new(big.Float).Quo(creditsDecimal, carDecimal)
+
+	// Format to 6 decimal places for ACME precision
+	acmeDecimal = acmeFloat.Text('f', 6)
+
+	return credits, acmeDecimal
+}
