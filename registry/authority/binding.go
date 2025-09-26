@@ -19,6 +19,7 @@ type Binding struct {
 	KeyPage    *url.URL  `json:"keyPage"`             // L0 key page URL (acc://<adi>/book/<page>)
 	PubKeyHash []byte    `json:"pubKeyHash"`          // ed25519 sha256-ripemd160 per Accumulate convention
 	Perms      []string  `json:"perms"`               // ["writeData","sendTokens","updateAuth"]
+	KeyAlias   string    `json:"keyAlias"`            // Keystore alias for the signing key
 	CreatedAt  time.Time `json:"createdAt"`           // When this binding was created
 }
 
@@ -51,7 +52,7 @@ func IsValidPermission(perm string) bool {
 }
 
 // NewBinding creates a new binding with validation
-func NewBinding(contract, keyBook, keyPage *url.URL, pubKeyHash []byte, perms []string) (*Binding, error) {
+func NewBinding(contract, keyBook, keyPage *url.URL, pubKeyHash []byte, perms []string, keyAlias string) (*Binding, error) {
 	// Validate contract URL
 	if err := accutil.ValidateContractAddr(contract); err != nil {
 		return nil, fmt.Errorf("invalid contract URL: %w", err)
@@ -95,6 +96,11 @@ func NewBinding(contract, keyBook, keyPage *url.URL, pubKeyHash []byte, perms []
 		}
 	}
 
+	// Validate key alias
+	if strings.TrimSpace(keyAlias) == "" {
+		return nil, fmt.Errorf("key alias cannot be empty")
+	}
+
 	// Remove duplicates from permissions
 	uniquePerms := make([]string, 0, len(perms))
 	seen := make(map[string]bool)
@@ -111,6 +117,7 @@ func NewBinding(contract, keyBook, keyPage *url.URL, pubKeyHash []byte, perms []
 		KeyPage:    keyPage,
 		PubKeyHash: pubKeyHash,
 		Perms:      uniquePerms,
+		KeyAlias:   strings.TrimSpace(keyAlias),
 		CreatedAt:  time.Now(),
 	}, nil
 }
@@ -150,6 +157,10 @@ func (b *Binding) Validate() error {
 
 	if len(b.Perms) == 0 {
 		return fmt.Errorf("permissions cannot be empty")
+	}
+
+	if strings.TrimSpace(b.KeyAlias) == "" {
+		return fmt.Errorf("key alias cannot be empty")
 	}
 
 	// Validate each permission
