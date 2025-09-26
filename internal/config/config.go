@@ -54,6 +54,11 @@ type Config struct {
 		ReservedLabel string `yaml:"reservedLabel"` // default "accumen"
 		Enforce       bool   `yaml:"enforce"`       // enforce namespace restrictions
 	} `yaml:"namespace"`
+	Events struct {
+		ReconnectMin string `yaml:"reconnectMin"` // minimum reconnect delay (e.g., "1s")
+		ReconnectMax string `yaml:"reconnectMax"` // maximum reconnect delay (e.g., "60s")
+		Enable       bool   `yaml:"enable"`       // enable event monitoring for confirmations
+	} `yaml:"events"`
 	SequencerKey string `yaml:"sequencerKey"` // DEPRECATED: hex or base64, use Signer instead
 }
 
@@ -201,6 +206,15 @@ func (c *Config) setDefaults() error {
 		c.Namespace.ReservedLabel = "accumen"
 	}
 
+	// Set default events configuration
+	if c.Events.ReconnectMin == "" {
+		c.Events.ReconnectMin = "1s"
+	}
+	if c.Events.ReconnectMax == "" {
+		c.Events.ReconnectMax = "60s"
+	}
+	// Events.Enable defaults to false (no change needed)
+
 	return nil
 }
 
@@ -334,6 +348,28 @@ func (c *Config) validate() error {
 		}
 	}
 
+	// Validate events configuration
+	if c.Events.ReconnectMin != "" {
+		if _, err := time.ParseDuration(c.Events.ReconnectMin); err != nil {
+			return fmt.Errorf("invalid events reconnect min duration %s: %w", c.Events.ReconnectMin, err)
+		}
+	}
+	if c.Events.ReconnectMax != "" {
+		if _, err := time.ParseDuration(c.Events.ReconnectMax); err != nil {
+			return fmt.Errorf("invalid events reconnect max duration %s: %w", c.Events.ReconnectMax, err)
+		}
+	}
+
+	// Validate reconnect min <= reconnect max
+	if c.Events.ReconnectMin != "" && c.Events.ReconnectMax != "" {
+		minDuration, _ := time.ParseDuration(c.Events.ReconnectMin)
+		maxDuration, _ := time.ParseDuration(c.Events.ReconnectMax)
+		if minDuration > maxDuration {
+			return fmt.Errorf("events reconnect min (%s) cannot be greater than reconnect max (%s)",
+				c.Events.ReconnectMin, c.Events.ReconnectMax)
+		}
+	}
+
 	return nil
 }
 
@@ -393,6 +429,26 @@ func (c *Config) GetConfirmTimeoutDuration() time.Duration {
 	if err != nil {
 		// This should not happen if validation passed
 		return 30 * time.Second
+	}
+	return duration
+}
+
+// GetEventsReconnectMinDuration returns the events reconnect min duration
+func (c *Config) GetEventsReconnectMinDuration() time.Duration {
+	duration, err := time.ParseDuration(c.Events.ReconnectMin)
+	if err != nil {
+		// This should not happen if validation passed
+		return 1 * time.Second
+	}
+	return duration
+}
+
+// GetEventsReconnectMaxDuration returns the events reconnect max duration
+func (c *Config) GetEventsReconnectMaxDuration() time.Duration {
+	duration, err := time.ParseDuration(c.Events.ReconnectMax)
+	if err != nil {
+		// This should not happen if validation passed
+		return 60 * time.Second
 	}
 	return duration
 }

@@ -329,6 +329,9 @@ type Sequencer struct {
 	// Registry client
 	registryClient *dn.Client
 
+	// Events manager for transaction confirmations
+	eventsManager *l0api.Manager
+
 	// Metadata and anchoring
 	metadataBuilder *json.MetadataBuilder
 	dnWriter        *anchors.DNWriter
@@ -415,6 +418,17 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 		return nil, fmt.Errorf("failed to create DN writer: %w", err)
 	}
 
+	// Create events manager if events are enabled
+	var eventsManager *l0api.Manager
+	if config.Events.Enable {
+		managerConfig := &l0api.ManagerConfig{
+			ServerURL:    config.Bridge.Client.ServerURL,
+			ReconnectMin: config.GetEventsReconnectMinDuration(),
+			ReconnectMax: config.GetEventsReconnectMaxDuration(),
+		}
+		eventsManager = l0api.NewManager(managerConfig)
+	}
+
 	sequencer := &Sequencer{
 		config:           config,
 		mempool:          mempool,
@@ -424,6 +438,7 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 		submitter:        submitter,
 		creditMgr:        creditMgr,
 		registryClient:   registryClient,
+		eventsManager:    eventsManager,
 		metadataBuilder:  metadataBuilder,
 		dnWriter:         dnWriter,
 		blockHeight:      engine.GetCurrentHeight(),
@@ -478,6 +493,13 @@ func (s *Sequencer) Start(ctx context.Context) error {
 		}
 	}
 
+	// Start events manager if enabled
+	if s.eventsManager != nil {
+		if err := s.eventsManager.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start events manager: %w", err)
+		}
+	}
+
 	// Start block production timer
 	s.blockTicker = time.NewTicker(s.config.BlockTime)
 
@@ -519,6 +541,11 @@ func (s *Sequencer) Stop(ctx context.Context) error {
 	// Stop output submitter
 	if err := s.submitter.Stop(); err != nil {
 		return fmt.Errorf("failed to stop output submitter: %w", err)
+	}
+
+	// Stop events manager
+	if s.eventsManager != nil {
+		s.eventsManager.Stop()
 	}
 
 	// Close DN writer
@@ -650,6 +677,36 @@ func (s *Sequencer) writeTransactionMetadata(ctx context.Context, block *Block) 
 				return
 			}
 			fmt.Printf("Metadata written for tx %s: %s\n", txID, txid)
+
+			// Subscribe to confirmation if events manager is available
+			if s.eventsManager != nil {
+				statusCh, cancel := s.eventsManager.SubscribeTx(txid)
+
+				// Monitor confirmation status in a separate goroutine
+				go func() {
+					defer cancel()
+
+					// Use a timeout to avoid waiting indefinitely
+					timeout := time.After(30 * time.Second)
+
+					for {
+						select {
+						case status := <-statusCh:
+							switch status.Status {
+							case "confirmed":
+								fmt.Printf("Transaction %s confirmed: %s\n", txID, txid)
+								return
+							case "failed":
+								fmt.Printf("Transaction %s failed: %s (error: %s)\n", txID, txid, status.Error)
+								return
+							}
+						case <-timeout:
+							fmt.Printf("Transaction %s confirmation timeout: %s\n", txID, txid)
+							return
+						}
+					}
+				}()
+			}
 		}(jsonBytes, result.TxID)
 	}
 }
@@ -680,6 +737,36 @@ func (s *Sequencer) writeAnchor(ctx context.Context, block *Block) {
 		s.mu.Unlock()
 
 		fmt.Printf("Anchor written for block %d: %s\n", block.Header.Height, txid)
+
+		// Subscribe to confirmation if events manager is available
+		if s.eventsManager != nil {
+			statusCh, cancel := s.eventsManager.SubscribeTx(txid)
+
+			// Monitor confirmation status in a separate goroutine
+			go func() {
+				defer cancel()
+
+				// Use a timeout to avoid waiting indefinitely
+				timeout := time.After(60 * time.Second) // Longer timeout for anchors
+
+				for {
+					select {
+					case status := <-statusCh:
+						switch status.Status {
+						case "confirmed":
+							fmt.Printf("Anchor for block %d confirmed: %s\n", block.Header.Height, txid)
+							return
+						case "failed":
+							fmt.Printf("Anchor for block %d failed: %s (error: %s)\n", block.Header.Height, txid, status.Error)
+							return
+						}
+					case <-timeout:
+						fmt.Printf("Anchor for block %d confirmation timeout: %s\n", block.Header.Height, txid)
+						return
+					}
+				}
+			}()
+		}
 	}()
 }
 
