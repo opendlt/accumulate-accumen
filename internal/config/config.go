@@ -72,6 +72,21 @@ type Config struct {
 	Network struct {
 		Name string `yaml:"name"` // devnet|testnet|mainnet
 	} `yaml:"network"`
+	Server struct {
+		Addr string `yaml:"addr"`
+		TLS  struct {
+			Cert string `yaml:"cert"`
+			Key  string `yaml:"key"`
+		} `yaml:"tls"`
+		APIKeys []string `yaml:"apiKeys"`
+		CORS    struct {
+			Origins []string `yaml:"origins"`
+		} `yaml:"cors"`
+		Rate struct {
+			RPS   int `yaml:"rps"`
+			Burst int `yaml:"burst"`
+		} `yaml:"rate"`
+	} `yaml:"server"`
 	Profiles struct {
 		Name string `yaml:"name"` // "mainnet"|"testnet"|"devnet"|"local"
 		Path string `yaml:"path"` // optional explicit file path
@@ -407,6 +422,17 @@ func (c *Config) setDefaults() error {
 		c.Keystore.Path = "keystore" // Default keystore directory
 	}
 
+	// Set default server configuration
+	if c.Server.Addr == "" {
+		c.Server.Addr = ":8666" // Default RPC server address
+	}
+	if c.Server.Rate.RPS == 0 {
+		c.Server.Rate.RPS = 100 // Default 100 requests per second
+	}
+	if c.Server.Rate.Burst == 0 {
+		c.Server.Rate.Burst = 200 // Default burst of 200 requests
+	}
+
 	return nil
 }
 
@@ -573,6 +599,28 @@ func (c *Config) validate() error {
 	// Validate keystore configuration
 	if c.Keystore.Path == "" {
 		return fmt.Errorf("keystore path cannot be empty")
+	}
+
+	// Validate server configuration
+	if c.Server.Addr == "" {
+		return fmt.Errorf("server address cannot be empty")
+	}
+	if c.Server.Rate.RPS < 0 {
+		return fmt.Errorf("server rate RPS must be non-negative, got %d", c.Server.Rate.RPS)
+	}
+	if c.Server.Rate.Burst < 0 {
+		return fmt.Errorf("server rate burst must be non-negative, got %d", c.Server.Rate.Burst)
+	}
+	if c.Server.Rate.Burst > 0 && c.Server.Rate.Burst < c.Server.Rate.RPS {
+		return fmt.Errorf("server rate burst (%d) must be greater than or equal to RPS (%d)", c.Server.Rate.Burst, c.Server.Rate.RPS)
+	}
+
+	// Validate TLS configuration if provided
+	if c.Server.TLS.Cert != "" && c.Server.TLS.Key == "" {
+		return fmt.Errorf("server TLS cert specified but key is missing")
+	}
+	if c.Server.TLS.Key != "" && c.Server.TLS.Cert == "" {
+		return fmt.Errorf("server TLS key specified but cert is missing")
 	}
 
 	return nil
