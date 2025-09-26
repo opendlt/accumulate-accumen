@@ -535,6 +535,268 @@ Compared to the embedded simulator, a real devnet provides:
 
 This makes it ideal for integration testing and development workflows that require a production-like environment.
 
+## Run Devnet Smoke Test
+
+For comprehensive end-to-end testing against a real Accumulate devnet, use the devnet smoke test. This test validates the entire Accumen stack including contract deployment, transaction submission, state queries, and DN metadata writes.
+
+### Prerequisites
+
+- Real Accumulate devnet running (see "Run a Real Devnet" section above)
+- Accumen sequencer running with proper configuration
+- Signer configured in `config/local.yaml`
+- L0 endpoints configured for devnet access
+
+### Configuration Requirements
+
+Ensure your `config/local.yaml` has the following configured:
+
+```yaml
+# L0 endpoints for devnet
+l0:
+  source: static
+  static:
+    endpoints:
+      - http://localhost:26660  # Directory Network
+      - http://localhost:26670  # Block Validator 0
+      - http://localhost:26680  # Block Validator 1
+      - http://localhost:26690  # Block Validator 2
+
+# Signer configuration (required)
+signer:
+  type: "file"
+  key: "/path/to/your/private-key.hex"
+
+# Events monitoring (optional but recommended)
+events:
+  enable: true
+  reconnectMin: "1s"
+  reconnectMax: "30s"
+
+# Bridge configuration for L0 integration
+bridge:
+  enableBridge: true
+  client:
+    serverURL: "http://localhost:26660"
+
+# DN paths for metadata verification
+dnPaths:
+  anchorsBase: "acc://dn.acme/anchors"
+  txBase: "acc://dn.acme/tx-metadata"
+```
+
+### Running the Smoke Test
+
+#### Windows (PowerShell)
+
+```powershell
+# Set environment variable and run test
+$env:ACC_DEVNET = "1"
+go test ./tests/e2e -run TestAccumenDevnetSmoke -v -timeout 10m
+```
+
+#### POSIX (Linux/macOS)
+
+```bash
+# Set environment variable and run test
+ACC_DEVNET=1 go test ./tests/e2e -run TestAccumenDevnetSmoke -v -timeout 10m
+```
+
+#### From Specific Directory
+
+```bash
+# Run from project root
+ACC_DEVNET=1 go test -C ./tests/e2e -run TestAccumenDevnetSmoke -v -timeout 10m
+
+# Or change to tests directory first
+cd tests/e2e
+ACC_DEVNET=1 go test -run TestAccumenDevnetSmoke -v -timeout 10m
+```
+
+### Expected Test Flow
+
+The smoke test performs the following operations in sequence:
+
+1. **Sequencer Status Check**
+   - Verifies Accumen sequencer is running and responsive
+   - Checks RPC endpoint connectivity
+
+2. **Contract Deployment**
+   - Deploys a minimal counter contract
+   - Verifies successful deployment with transaction hash
+
+3. **Event Monitoring Setup**
+   - Sets up polling for transaction status
+   - Prepares to monitor blockchain progression
+
+4. **Transaction Submissions**
+   - Submits 2 increment transactions to the counter
+   - Records transaction hashes for verification
+
+5. **Execution Monitoring**
+   - Waits for transactions to be processed
+   - Monitors block height progression
+
+6. **State Verification**
+   - Queries contract state to verify counter value
+   - Expects counter to equal 2 (from 2 increments)
+
+7. **DN Metadata Verification**
+   - Checks for metadata writes to the Directory Network
+   - Verifies L0 integration is working
+
+8. **Final Status Check**
+   - Confirms sequencer is still healthy
+   - Verifies blockchain progression occurred
+
+### Expected Output
+
+```
+=== RUN   TestAccumenDevnetSmoke
+    devnet_smoke_test.go:29: 🚀 Starting Accumen Devnet E2E Smoke Test
+    devnet_smoke_test.go:55: Using L0 endpoints: [http://localhost:26660 http://localhost:26670 http://localhost:26680 http://localhost:26690]
+    devnet_smoke_test.go:56: Signer type: file
+    devnet_smoke_test.go:57: DN paths - TxMeta: acc://dn.acme/tx-metadata, Anchors: acc://dn.acme/anchors
+=== RUN   TestAccumenDevnetSmoke/SequencerStatus
+    devnet_smoke_test.go:79: Sequencer status - Chain: accumen-local, Height: 15, Running: true
+=== RUN   TestAccumenDevnetSmoke/DeployCounter
+    devnet_smoke_test.go:92: Counter deployed at acc://counter-devnet-test.acme with tx hash: a1b2c3d4...
+=== RUN   TestAccumenDevnetSmoke/SetupEventMonitoring
+    devnet_smoke_test.go:100: Event monitoring setup - will poll for transaction status
+=== RUN   TestAccumenDevnetSmoke/SubmitIncrements
+    devnet_smoke_test.go:119: First increment submitted: b2c3d4e5...
+    devnet_smoke_test.go:128: Second increment submitted: c3d4e5f6...
+=== RUN   TestAccumenDevnetSmoke/WaitForExecution
+    devnet_smoke_test.go:146: Current block height: 18
+    devnet_smoke_test.go:156: Detected blockchain progression (height: 18)
+=== RUN   TestAccumenDevnetSmoke/QueryState
+    devnet_smoke_test.go:168: Query result - Contract: acc://counter-devnet-test.acme, Key: counter, Exists: true
+    devnet_smoke_test.go:171: Counter value: 2 (type: uint64)
+    devnet_smoke_test.go:174: ✅ Counter state is correct: 2
+=== RUN   TestAccumenDevnetSmoke/VerifyDNMetadata
+    devnet_smoke_test.go:194: ✅ Found 3 DN metadata entries
+=== RUN   TestAccumenDevnetSmoke/FinalVerification
+    devnet_smoke_test.go:205: Final sequencer status - Height: 19, Running: true
+    devnet_smoke_test.go:215: ✅ Devnet smoke test completed successfully
+    devnet_smoke_test.go:254: 🎉 Accumen Devnet E2E Smoke Test completed
+--- PASS: TestAccumenDevnetSmoke (45.67s)
+```
+
+### Troubleshooting
+
+#### Test Skipped
+
+```
+=== RUN   TestAccumenDevnetSmoke
+    devnet_smoke_test.go:27: Skipping devnet smoke test - set ACC_DEVNET=1 to enable
+--- SKIP: TestAccumenDevnetSmoke (0.00s)
+```
+
+**Solution**: Set the `ACC_DEVNET=1` environment variable.
+
+#### Sequencer Connection Failed
+
+```
+Failed to get sequencer status: HTTP request failed: dial tcp 127.0.0.1:8666: connect: connection refused
+```
+
+**Solutions**:
+- Ensure Accumen sequencer is running on port 8666
+- Check sequencer configuration and startup logs
+- Verify firewall settings
+
+#### Signer Configuration Missing
+
+```
+Signer must be configured in config/local.yaml for devnet testing
+```
+
+**Solutions**:
+- Generate keys using `./bin/accucli keys gen`
+- Save key with `./bin/accucli keys save --file ~/.accumen/dev-key.hex --priv <hex>`
+- Configure signer in `config/local.yaml`
+
+#### L0 Endpoint Connection Failed
+
+```
+No L0 URLs configured for DN metadata verification
+```
+
+**Solutions**:
+- Ensure devnet is running (see devnet-init.sh and devnet-run.sh)
+- Configure L0 endpoints in `config/local.yaml`
+- Check devnet RPC endpoint availability
+
+#### Transaction Execution Timeout
+
+```
+Warning: No confirmed transactions detected via status polling
+```
+
+**Solutions**:
+- Check sequencer logs for execution errors
+- Verify block production is working (block height increasing)
+- Ensure sufficient time for transaction processing
+- Check mempool size and configuration
+
+#### State Query Failed
+
+```
+⚠️  Counter state not found (may be execution timing or implementation)
+```
+
+**Solutions**:
+- This is often a timing issue - transactions may still be processing
+- Check sequencer execution logs
+- Verify contract deployment was successful
+- Ensure proper WASM contract implementation
+
+#### DN Metadata Not Found
+
+```
+⚠️  No DN metadata entries found (may be bridge disabled or timing)
+```
+
+**Solutions**:
+- Check if bridge is enabled in configuration
+- Verify L0 devnet connectivity
+- Check sequencer bridge logs
+- This may be expected if bridge is intentionally disabled
+
+### Integration with CI/CD
+
+The devnet smoke test can be integrated into CI/CD pipelines:
+
+```yaml
+# Example GitHub Actions
+- name: Setup Devnet
+  run: |
+    ./ops/devnet-init.sh --work-dir /tmp/devnet-ci
+    ./ops/devnet-run.sh --work-dir /tmp/devnet-ci &
+    sleep 30  # Wait for devnet to start
+
+- name: Start Accumen
+  run: |
+    go run ./cmd/accumen --role=sequencer --config=config/devnet-ci.yaml &
+    sleep 10  # Wait for sequencer to start
+
+- name: Run Devnet Smoke Test
+  run: |
+    ACC_DEVNET=1 go test ./tests/e2e -run TestAccumenDevnetSmoke -v -timeout 10m
+```
+
+### Test Customization
+
+The test can be customized by modifying:
+
+- **Contract Address**: Change `contractAddr` variable
+- **Test Timeout**: Adjust context timeout (default: 5 minutes)
+- **RPC Endpoint**: Modify `client.rpcURL` for different ports
+- **L0 Endpoints**: Configure different devnet endpoints
+- **Transaction Count**: Add more increment operations
+- **Polling Intervals**: Adjust wait times for different environments
+
+This comprehensive smoke test validates that Accumen works correctly with a real Accumulate devnet, providing confidence in the full integration stack.
+
 ## Deploying a Contract via RPC
 
 Accumen supports deploying WASM smart contracts through the JSON-RPC API. Contracts are stored persistently and referenced by their Accumulate-style addresses.
