@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -174,4 +177,195 @@ func ReadSnapshot(path string) (*SnapshotMeta, *SnapshotIterator, error) {
 	}
 
 	return &meta, iterator, nil
+}
+
+// SnapshotInfo contains metadata about a snapshot file
+type SnapshotInfo struct {
+	Path     string        `json:"path"`
+	Filename string        `json:"filename"`
+	Size     int64         `json:"size"`
+	ModTime  time.Time     `json:"mod_time"`
+	Meta     *SnapshotMeta `json:"meta,omitempty"`
+}
+
+// ListSnapshots returns a list of snapshot files in the given directory
+func ListSnapshots(dirPath string) ([]SnapshotInfo, error) {
+	// Ensure directory exists
+	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+		return []SnapshotInfo{}, nil
+	}
+
+	// Read directory contents
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read snapshot directory %s: %w", dirPath, err)
+	}
+
+	var snapshots []SnapshotInfo
+
+	for _, entry := range entries {
+		// Only consider .snap files
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".snap") {
+			continue
+		}
+
+		fullPath := filepath.Join(dirPath, entry.Name())
+
+		// Get file info
+		info, err := entry.Info()
+		if err != nil {
+			continue // Skip files we can't stat
+		}
+
+		snapshotInfo := SnapshotInfo{
+			Path:     fullPath,
+			Filename: entry.Name(),
+			Size:     info.Size(),
+			ModTime:  info.ModTime(),
+		}
+
+		// Try to read metadata (non-fatal if it fails)
+		if meta, _, err := ReadSnapshot(fullPath); err == nil {
+			snapshotInfo.Meta = meta
+		}
+
+		snapshots = append(snapshots, snapshotInfo)
+	}
+
+	// Sort by modification time (newest first)
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].ModTime.After(snapshots[j].ModTime)
+	})
+
+	return snapshots, nil
+}
+
+// PruneOld removes old snapshot files, keeping only the specified number of recent snapshots
+func PruneOld(dirPath string, retain int) error {
+	if retain <= 0 {
+		return fmt.Errorf("retain count must be positive, got %d", retain)
+	}
+
+	// Get list of snapshots
+	snapshots, err := ListSnapshots(dirPath)
+	if err != nil {
+		return fmt.Errorf("failed to list snapshots: %w", err)
+	}
+
+	// If we have fewer snapshots than the retain count, nothing to prune
+	if len(snapshots) <= retain {
+		return nil
+	}
+
+	// Remove old snapshots (keep the first 'retain' snapshots, which are the newest)
+	toRemove := snapshots[retain:]
+
+	var removedCount int
+	var lastErr error
+
+	for _, snapshot := range toRemove {
+		if err := os.Remove(snapshot.Path); err != nil {
+			lastErr = fmt.Errorf("failed to remove snapshot %s: %w", snapshot.Path, err)
+			continue // Continue trying to remove other snapshots
+		}
+		removedCount++
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("pruning completed with errors (removed %d of %d): %w",
+			removedCount, len(toRemove), lastErr)
+	}
+
+	return nil
+}
+
+// GetSnapshotMeta reads only the metadata from a snapshot file without loading the full snapshot
+func GetSnapshotMeta(path string) (*SnapshotMeta, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open snapshot file: %w", err)
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+
+	// Read metadata length
+	var metaLen uint32
+	if err := binary.Read(reader, binary.LittleEndian, &metaLen); err != nil {
+		return nil, fmt.Errorf("failed to read metadata length: %w", err)
+	}
+
+	// Read metadata
+	metaBytes := make([]byte, metaLen)
+	if _, err := io.ReadFull(reader, metaBytes); err != nil {
+		return nil, fmt.Errorf("failed to read metadata: %w", err)
+	}
+
+	var meta SnapshotMeta
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+	}
+
+	return &meta, nil
+}
+
+// RestoreFromSnapshot restores a KV store from a snapshot
+func RestoreFromSnapshot(path string, kv KVStore) error {
+	meta, iterator, err := ReadSnapshot(path)
+	if err != nil {
+		return fmt.Errorf("failed to read snapshot: %w", err)
+	}
+	defer iterator.Close()
+
+	// Clear existing data
+	if err := ClearKVStore(kv); err != nil {
+		return fmt.Errorf("failed to clear KV store: %w", err)
+	}
+
+	// Restore key-value pairs
+	var restoredCount uint64
+	for {
+		key, value, err := iterator.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read snapshot entry: %w", err)
+		}
+
+		if err := kv.Put(string(key), value); err != nil {
+			return fmt.Errorf("failed to restore key %s: %w", string(key), err)
+		}
+
+		restoredCount++
+	}
+
+	if restoredCount != meta.NumKeys {
+		return fmt.Errorf("restored key count mismatch: expected %d, got %d",
+			meta.NumKeys, restoredCount)
+	}
+
+	return nil
+}
+
+// ClearKVStore removes all keys from a KV store
+func ClearKVStore(kv KVStore) error {
+	// Collect all keys first to avoid modifying during iteration
+	var keys []string
+	err := kv.Iterate(func(key, value []byte) error {
+		keys = append(keys, string(key))
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to collect keys: %w", err)
+	}
+
+	// Delete all keys
+	for _, key := range keys {
+		if err := kv.Delete(key); err != nil {
+			return fmt.Errorf("failed to delete key %s: %w", key, err)
+		}
+	}
+
+	return nil
 }
