@@ -20,6 +20,7 @@ import (
 
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
+	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/keystore"
@@ -51,6 +52,7 @@ func main() {
 		txCommand(),
 		simulateCommand(),
 		scopeCommand(),
+		auditWasmCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -1169,4 +1171,63 @@ func showScope(contractURL string) error {
 	})
 
 	return nil
+}
+
+// auditWasmCommand creates the audit-wasm subcommand
+func auditWasmCommand() *cobra.Command {
+	var wasmPath string
+
+	cmd := &cobra.Command{
+		Use:   "audit-wasm",
+		Short: "Audit WASM module for determinism",
+		Long:  "Analyze a WASM module and report any non-deterministic features or violations",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if wasmPath == "" {
+				return fmt.Errorf("--wasm is required")
+			}
+
+			// Read WASM file
+			wasmBytes, err := os.ReadFile(wasmPath)
+			if err != nil {
+				return fmt.Errorf("failed to read WASM file: %v", err)
+			}
+
+			// Run audit
+			auditReport := runtime.AuditWASMModule(wasmBytes)
+
+			// Prepare result
+			result := map[string]interface{}{
+				"file":        wasmPath,
+				"size":        len(wasmBytes),
+				"passed":      auditReport.Ok,
+				"memory_pages": auditReport.MemPages,
+				"exports":     auditReport.Exports,
+			}
+
+			if len(auditReport.Reasons) > 0 {
+				result["violations"] = auditReport.Reasons
+			}
+
+			// Add summary
+			if auditReport.Ok {
+				result["summary"] = "WASM module passed all determinism checks"
+			} else {
+				result["summary"] = fmt.Sprintf("WASM module failed audit with %d violations", len(auditReport.Reasons))
+			}
+
+			prettyPrint(result)
+
+			// Exit with error code if audit failed
+			if !auditReport.Ok {
+				os.Exit(1)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&wasmPath, "wasm", "", "Path to WASM file to audit (required)")
+	cmd.MarkFlagRequired("wasm")
+
+	return cmd
 }
