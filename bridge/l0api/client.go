@@ -10,6 +10,7 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 
 	"github.com/opendlt/accumulate-accumen/internal/crypto/devsigner"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
@@ -17,11 +18,12 @@ import (
 
 // Client represents an Accumulate L0 API v3 client
 type Client struct {
-	endpoint string
-	client   api.Querier
-	submitter api.Submitter
-	config   *ClientConfig
-	signer   signer.Signer
+	endpoint       string
+	client         api.Querier
+	submitter      api.Submitter
+	config         *ClientConfig
+	signer         signer.Signer
+	signerSelector signer.SignerSelector
 }
 
 // ClientConfig defines configuration for the L0 API client
@@ -62,6 +64,11 @@ func NewClient(config *ClientConfig) (*Client, error) {
 
 // NewClientWithSigner creates a new Accumulate L0 API client with a signer
 func NewClientWithSigner(config *ClientConfig, sig signer.Signer) (*Client, error) {
+	return NewClientWithSignerSelector(config, sig, nil)
+}
+
+// NewClientWithSignerSelector creates a new Accumulate L0 API client with a signer selector
+func NewClientWithSignerSelector(config *ClientConfig, defaultSigner signer.Signer, selector signer.SignerSelector) (*Client, error) {
 	if config == nil {
 		return nil, fmt.Errorf("client config cannot be nil")
 	}
@@ -79,20 +86,21 @@ func NewClientWithSigner(config *ClientConfig, sig signer.Signer) (*Client, erro
 	rpcClient := jsonrpc.NewClient(config.Endpoint, jsonrpc.WithHTTPClient(httpClient))
 
 	// If no signer provided but SequencerKey is set, create legacy signer for backward compatibility
-	if sig == nil && config.SequencerKey != "" {
+	if defaultSigner == nil && config.SequencerKey != "" {
 		legacySigner, err := devsigner.NewFromHex(config.SequencerKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create legacy signer from SequencerKey: %w", err)
 		}
-		sig = legacySigner.AsNewSigner()
+		defaultSigner = legacySigner.AsNewSigner()
 	}
 
 	return &Client{
-		endpoint:  config.Endpoint,
-		client:    rpcClient,
-		submitter: rpcClient,
-		config:    config,
-		signer:    sig,
+		endpoint:       config.Endpoint,
+		client:         rpcClient,
+		submitter:      rpcClient,
+		config:         config,
+		signer:         defaultSigner,
+		signerSelector: selector,
 	}, nil
 }
 
@@ -325,14 +333,34 @@ func (c *Client) IsHealthy(ctx context.Context) error {
 
 // SubmitEnvelope signs (if signer present) and submits an envelope
 func (c *Client) SubmitEnvelope(ctx context.Context, env *build.EnvelopeBuilder) (string, error) {
+	return c.SubmitEnvelopeForContract(ctx, env, nil)
+}
+
+// SubmitEnvelopeForContract signs and submits an envelope using contract-specific signer selection
+func (c *Client) SubmitEnvelopeForContract(ctx context.Context, env *build.EnvelopeBuilder, contractURL *url.URL) (string, error) {
 	if env == nil {
 		return "", fmt.Errorf("envelope cannot be nil")
 	}
 
-	// Sign envelope if signer is configured
-	if c.signer != nil {
-		// Sign the envelope using the configured signer
-		if err := c.signer.SignEnvelope(env); err != nil {
+	// Select appropriate signer
+	var selectedSigner signer.Signer
+
+	// First try to use signer selector for contract-specific signing
+	if c.signerSelector != nil && contractURL != nil {
+		if contractSigner, err := c.signerSelector(contractURL); err == nil && contractSigner != nil {
+			selectedSigner = contractSigner
+		}
+	}
+
+	// Fallback to default signer if no contract-specific signer found
+	if selectedSigner == nil {
+		selectedSigner = c.signer
+	}
+
+	// Sign envelope if signer is available
+	if selectedSigner != nil {
+		// Sign the envelope using the selected signer
+		if err := selectedSigner.SignEnvelope(env); err != nil {
 			return "", fmt.Errorf("failed to sign envelope: %w", err)
 		}
 	} else {
