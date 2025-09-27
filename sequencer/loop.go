@@ -27,9 +27,9 @@ import (
 	"github.com/opendlt/accumulate-accumen/types/json"
 	"github.com/opendlt/accumulate-accumen/types/proto/accumen"
 
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/client/signing"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"google.golang.org/protobuf/proto"
@@ -243,7 +243,6 @@ func (sm *SnapshotManager) findLatestSnapshot() (string, error) {
 	return filepath.Join(sm.snapshotDir, snapshots[0]), nil
 }
 
-
 // extractHeightFromFilename extracts height from snapshot filename
 func extractHeightFromFilename(filename string) uint64 {
 	// Filename format is "<height>.snap"
@@ -281,8 +280,8 @@ type Sequencer struct {
 	config *Config
 
 	// Core components
-	mempool   *Mempool
-	engine    *ExecutionEngine
+	mempool *Mempool
+	engine  *ExecutionEngine
 
 	// Bridge components
 	l0Client       *l0api.Client
@@ -316,8 +315,8 @@ type Sequencer struct {
 	anchorInterval   uint64
 
 	// Control channels
-	stopChan     chan struct{}
-	blockTicker  *time.Ticker
+	stopChan    chan struct{}
+	blockTicker *time.Ticker
 
 	// Metrics
 	blocksProduced uint64
@@ -327,15 +326,15 @@ type Sequencer struct {
 
 // SequencerStats contains sequencer statistics
 type SequencerStats struct {
-	Running        bool              `json:"running"`
-	BlockHeight    uint64            `json:"block_height"`
-	BlocksProduced uint64            `json:"blocks_produced"`
-	TxsProcessed   uint64            `json:"txs_processed"`
-	Uptime         time.Duration     `json:"uptime"`
-	MempoolStats   *MempoolStats     `json:"mempool_stats"`
-	ExecutionStats *ExecutionStats   `json:"execution_stats"`
+	Running        bool                     `json:"running"`
+	BlockHeight    uint64                   `json:"block_height"`
+	BlocksProduced uint64                   `json:"blocks_produced"`
+	TxsProcessed   uint64                   `json:"txs_processed"`
+	Uptime         time.Duration            `json:"uptime"`
+	MempoolStats   *MempoolStats            `json:"mempool_stats"`
+	ExecutionStats *ExecutionStats          `json:"execution_stats"`
 	BridgeStats    *outputs.SubmissionStats `json:"bridge_stats"`
-	DNWriterStats  *anchors.WriterStats      `json:"dn_writer_stats"`
+	DNWriterStats  *anchors.WriterStats     `json:"dn_writer_stats"`
 }
 
 // NewSequencer creates a new Accumen sequencer
@@ -387,7 +386,7 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 
 	// Create L0 round robin for endpoint management
 	rrConfig := &l0.Config{
-		Source:              l0.SourceStatic, // Default to static endpoints
+		Source:              l0.SourceStatic,                         // Default to static endpoints
 		StaticURLs:          []string{config.Bridge.Client.Endpoint}, // Use bridge client endpoint
 		WSPath:              "/ws",
 		HealthCheckInterval: 30 * time.Second,
@@ -420,7 +419,7 @@ func NewSequencer(config *Config) (*Sequencer, error) {
 	if config.Bridge.EnableBridge { // Use bridge enabled flag instead
 		managerConfig := &l0api.ManagerConfig{
 			ServerURL:    config.Bridge.Client.Endpoint,
-			ReconnectMin: 1 * time.Second,  // Default values
+			ReconnectMin: 1 * time.Second, // Default values
 			ReconnectMax: 60 * time.Second,
 		}
 		eventsManager = l0api.NewManager(managerConfig)
@@ -665,14 +664,14 @@ func (s *Sequencer) writeTransactionMetadata(ctx context.Context, block *Block) 
 			TxHash:        []byte(tx.ID), // Convert string to bytes
 			AppHash:       block.StateRoot,
 			Time:          block.Header.Timestamp,
-			ContractAddr:  tx.From, // Use transaction sender as contract address
-			Entry:         "execute", // Default entry point
+			ContractAddr:  tx.From,                // Use transaction sender as contract address
+			Entry:         "execute",              // Default entry point
 			Nonce:         []byte{byte(tx.Nonce)}, // Convert nonce to bytes
 			GasUsed:       result.GasUsed,
-			GasScheduleID: "v1.0.0", // TODO: get from config
+			GasScheduleID: "v1.0.0",                    // TODO: get from config
 			CreditsL0:     result.GasUsed / 1000 * 150, // 150 credits per 1k gas
-			CreditsL1:     result.GasUsed / 100,  // 1 credit per 100 gas
-			CreditsTotal:  result.GasUsed / 1000 * 150 + result.GasUsed / 100,
+			CreditsL1:     result.GasUsed / 100,        // 1 credit per 100 gas
+			CreditsTotal:  result.GasUsed/1000*150 + result.GasUsed/100,
 			AcmeBurnt:     fmt.Sprintf("0.%06d", result.GasUsed/1000), // Simple conversion
 			L0Outputs:     s.convertStagedOpsToL0Outputs(result.StagedOps),
 			Events:        s.convertRuntimeEventsToJSONEvents(result.Events),
@@ -1588,15 +1587,15 @@ func (s *Sequencer) buildBlockHeaderAnchor(header *accumen.BlockHeader) ([]byte,
 
 	// Build header anchor structure
 	anchor := map[string]interface{}{
-		"version":      "1.0.0",
-		"type":         "accumen_block_header",
-		"blockHeight":  header.Height,
-		"headerHash":   hex.EncodeToString(headerHash[:]),
-		"prevHash":     hex.EncodeToString(header.PrevHash),
-		"txsRoot":      hex.EncodeToString(header.TxsRoot),
-		"resultsRoot":  hex.EncodeToString(header.ResultsRoot),
-		"stateRoot":    hex.EncodeToString(header.StateRoot),
-		"timestamp":    timestamp.Format(time.RFC3339),
+		"version":     "1.0.0",
+		"type":        "accumen_block_header",
+		"blockHeight": header.Height,
+		"headerHash":  hex.EncodeToString(headerHash[:]),
+		"prevHash":    hex.EncodeToString(header.PrevHash),
+		"txsRoot":     hex.EncodeToString(header.TxsRoot),
+		"resultsRoot": hex.EncodeToString(header.ResultsRoot),
+		"stateRoot":   hex.EncodeToString(header.StateRoot),
+		"timestamp":   timestamp.Format(time.RFC3339),
 		"crossLink": map[string]interface{}{
 			"l1ChainId":    "accumen-l1",
 			"l1BlockHash":  hex.EncodeToString(headerHash[:]),
@@ -1666,8 +1665,8 @@ func (s *Sequencer) creditsManagementLoop(ctx context.Context) {
 func (s *Sequencer) ensureCredits(ctx context.Context) error {
 	// For now, use hardcoded values since we don't have access to internal config
 	// In a real implementation, these would come from configuration
-	minBuffer := uint64(1000)   // Keep at least 1000 credits
-	target := uint64(5000)      // Top up to 5000 credits
+	minBuffer := uint64(1000)                // Keep at least 1000 credits
+	target := uint64(5000)                   // Top up to 5000 credits
 	fundingToken := "acc://acme.acme/tokens" // Default ACME token URL
 
 	// Get the sequencer's key page URL from the DN writer configuration

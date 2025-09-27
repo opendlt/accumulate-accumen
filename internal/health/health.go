@@ -269,11 +269,11 @@ func DetailedStatusHandler() http.HandlerFunc {
 		snapshot := metrics.GetSnapshot()
 
 		response := map[string]interface{}{
-			"status":       "healthy",
-			"node_mode":    snapshot.NodeMode,
-			"timestamp":    snapshot.SnapshotTime.UTC().Format(time.RFC3339),
-			"uptime":       snapshot.SnapshotTime.Sub(parseStartTime(snapshot.StartTime)).String(),
-			"metrics":      snapshot,
+			"status":    "healthy",
+			"node_mode": snapshot.NodeMode,
+			"timestamp": snapshot.SnapshotTime.UTC().Format(time.RFC3339),
+			"uptime":    snapshot.SnapshotTime.Sub(parseStartTime(snapshot.StartTime)).String(),
+			"metrics":   snapshot,
 		}
 
 		// Determine overall health

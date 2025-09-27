@@ -30,11 +30,11 @@ import (
 )
 
 var (
-	role       = flag.String("role", "sequencer", "Node role: sequencer or follower")
-	configPath = flag.String("config", "", "Path to configuration file")
-	network    = flag.String("network", "", "Network profile: mainnet, testnet, devnet, or local (overrides config and env)")
-	logLevel   = flag.String("log-level", "info", "Log level: debug, info, warn, error")
-	rpcAddr    = flag.String("rpc", ":8666", "RPC server address (default :8666)")
+	role        = flag.String("role", "sequencer", "Node role: sequencer or follower")
+	configPath  = flag.String("config", "", "Path to configuration file")
+	network     = flag.String("network", "", "Network profile: mainnet, testnet, devnet, or local (overrides config and env)")
+	logLevel    = flag.String("log-level", "info", "Log level: debug, info, warn, error")
+	rpcAddr     = flag.String("rpc", ":8666", "RPC server address (default :8666)")
 	metricsAddr = flag.String("metrics", ":8667", "Metrics server address (default :8667)")
 )
 

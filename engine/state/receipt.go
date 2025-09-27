@@ -14,11 +14,11 @@ import (
 
 // Receipt represents a transaction execution receipt
 type Receipt struct {
-	TxHash   [32]byte  `json:"tx_hash"`
-	Events   []Event   `json:"events"`
-	GasUsed  uint64    `json:"gas_used"`
-	Error    string    `json:"error,omitempty"`
-	L0TxIDs  []string  `json:"l0_tx_ids"`
+	TxHash  [32]byte `json:"tx_hash"`
+	Events  []Event  `json:"events"`
+	GasUsed uint64   `json:"gas_used"`
+	Error   string   `json:"error,omitempty"`
+	L0TxIDs []string `json:"l0_tx_ids"`
 }
 
 // Event represents an event emitted during transaction execution
@@ -30,37 +30,37 @@ type Event struct {
 // LegacyReceipt represents the original execution receipt for WASM contract execution
 type LegacyReceipt struct {
 	// Execution metadata
-	Success      bool      `json:"success"`
-	Timestamp    time.Time `json:"timestamp"`
-	BlockHeight  uint64    `json:"block_height,omitempty"`
-	TxHash       []byte    `json:"tx_hash,omitempty"`
+	Success     bool      `json:"success"`
+	Timestamp   time.Time `json:"timestamp"`
+	BlockHeight uint64    `json:"block_height,omitempty"`
+	TxHash      []byte    `json:"tx_hash,omitempty"`
 
 	// Function execution details
-	FunctionName string    `json:"function_name"`
-	Parameters   [][]byte  `json:"parameters,omitempty"`
-	ReturnValue  []byte    `json:"return_value,omitempty"`
+	FunctionName string   `json:"function_name"`
+	Parameters   [][]byte `json:"parameters,omitempty"`
+	ReturnValue  []byte   `json:"return_value,omitempty"`
 
 	// Gas and resource usage
-	GasUsed      uint64    `json:"gas_used"`
-	GasLimit     uint64    `json:"gas_limit"`
-	GasPrice     uint64    `json:"gas_price,omitempty"`
+	GasUsed  uint64 `json:"gas_used"`
+	GasLimit uint64 `json:"gas_limit"`
+	GasPrice uint64 `json:"gas_price,omitempty"`
 
 	// Memory usage (in pages)
-	MemoryUsed   uint32    `json:"memory_used"`
-	MemoryLimit  uint32    `json:"memory_limit"`
+	MemoryUsed  uint32 `json:"memory_used"`
+	MemoryLimit uint32 `json:"memory_limit"`
 
 	// Execution time (for performance metrics)
 	ExecutionTime time.Duration `json:"execution_time"`
 
 	// Error information
-	Error        string    `json:"error,omitempty"`
-	ErrorCode    uint32    `json:"error_code,omitempty"`
+	Error     string `json:"error,omitempty"`
+	ErrorCode uint32 `json:"error_code,omitempty"`
 
 	// State changes
 	StateChanges []StateChange `json:"state_changes,omitempty"`
 
 	// Logs emitted during execution
-	Logs         []LogEntry `json:"logs,omitempty"`
+	Logs []LogEntry `json:"logs,omitempty"`
 }
 
 // StateChange represents a change to the key-value store
@@ -93,8 +93,8 @@ func (op Operation) String() string {
 
 // LogEntry represents a log message emitted during execution
 type LogEntry struct {
-	Level     LogLevel `json:"level"`
-	Message   string   `json:"message"`
+	Level     LogLevel  `json:"level"`
+	Message   string    `json:"message"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
@@ -136,10 +136,10 @@ func NewReceipt(txHash [32]byte) *Receipt {
 // NewLegacyReceipt creates a new execution receipt
 func NewLegacyReceipt() *LegacyReceipt {
 	return &LegacyReceipt{
-		Timestamp:     time.Now(),
-		StateChanges:  make([]StateChange, 0),
-		Logs:          make([]LogEntry, 0),
-		Parameters:    make([][]byte, 0),
+		Timestamp:    time.Now(),
+		StateChanges: make([]StateChange, 0),
+		Logs:         make([]LogEntry, 0),
+		Parameters:   make([][]byte, 0),
 	}
 }
 
@@ -518,13 +518,7 @@ func SortTxResults(results []*accumen.TxResult) {
 	})
 }
 
-// KVStore interface for key-value storage operations
-type KVStore interface {
-	Get(key []byte) ([]byte, error)
-	Set(key []byte, value []byte) error
-	Delete(key []byte) error
-	Iterate(fn func(key, value []byte) error) error
-}
+// KVStore interface is defined in kv.go
 
 // StoreReceipt stores a receipt in the KV store
 func StoreReceipt(kv KVStore, height uint64, index int, receipt *Receipt) error {

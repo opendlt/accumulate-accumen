@@ -240,7 +240,7 @@ func (nm *NamespaceManager) GetContractAuthorization(ctx context.Context, contra
 // ContractAuthorization represents the authorization status of a contract
 type ContractAuthorization struct {
 	ContractURL  string `json:"contract_url"`
-	Status       string `json:"status"`       // "authorized", "denied", "not_found"
+	Status       string `json:"status"` // "authorized", "denied", "not_found"
 	AuthorizedBy string `json:"authorized_by"`
 	Reason       string `json:"reason"`
 	Expires      string `json:"expires"`

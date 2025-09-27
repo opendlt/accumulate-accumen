@@ -22,9 +22,9 @@ import (
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/engine/state"
-	"github.com/opendlt/accumulate-accumen/internal/rpc"
-	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 	"github.com/opendlt/accumulate-accumen/internal/crypto/keystore"
+	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
+	"github.com/opendlt/accumulate-accumen/internal/rpc"
 )
 
 var (
@@ -132,7 +132,7 @@ func deployCommand() *cobra.Command {
 				ID:     1,
 				Method: "accumen.deployContract",
 				Params: map[string]interface{}{
-					"addr":    addr,
+					"addr":     addr,
 					"wasm_b64": wasmB64,
 				},
 			}
@@ -156,10 +156,10 @@ func deployCommand() *cobra.Command {
 
 			// Pretty-print the result
 			prettyPrint(map[string]interface{}{
-				"success":    true,
-				"address":    addr,
-				"wasm_hash":  resp.Result.WasmHash,
-				"wasm_size":  len(wasmBytes),
+				"success":   true,
+				"address":   addr,
+				"wasm_hash": resp.Result.WasmHash,
+				"wasm_size": len(wasmBytes),
 			})
 
 			return nil
@@ -372,10 +372,10 @@ func keysSaveCommand() *cobra.Command {
 			}
 
 			prettyPrint(map[string]interface{}{
-				"success": true,
-				"file":    filePath,
+				"success":     true,
+				"file":        filePath,
 				"permissions": "0600 (owner read/write only)",
-				"note":    "Key saved securely. Verify file permissions on your system.",
+				"note":        "Key saved securely. Verify file permissions on your system.",
 			})
 
 			return nil
@@ -527,10 +527,10 @@ func keystoreInitCommand() *cobra.Command {
 			}
 
 			prettyPrint(map[string]interface{}{
-				"success":     true,
+				"success":       true,
 				"keystore_path": ks.Path(),
-				"message":     "Keystore initialized successfully",
-				"note":        "Keys will be encrypted using OS-specific user information",
+				"message":       "Keystore initialized successfully",
+				"note":          "Keys will be encrypted using OS-specific user information",
 			})
 
 			return nil
@@ -583,12 +583,12 @@ func keystoreGenCommand() *cobra.Command {
 			}
 
 			prettyPrint(map[string]interface{}{
-				"success":        true,
-				"alias":          alias,
-				"public_key":     hex.EncodeToString(pubKey),
+				"success":         true,
+				"alias":           alias,
+				"public_key":      hex.EncodeToString(pubKey),
 				"public_key_hash": hex.EncodeToString(pubKeyHash),
-				"keystore":       keystorePath,
-				"note":           "Private key is securely stored in the keystore",
+				"keystore":        keystorePath,
+				"note":            "Private key is securely stored in the keystore",
 			})
 
 			return nil
@@ -812,7 +812,7 @@ func txSignCommand() *cobra.Command {
 				"signed_aliases": aliases,
 				"keystore":       keystorePath,
 				"envelope":       signedEnvelopeB64,
-				"note":          "Envelope has been signed with the specified keys",
+				"note":           "Envelope has been signed with the specified keys",
 			})
 
 			return nil
@@ -962,15 +962,15 @@ func simulateCommand() *cobra.Command {
 
 			// Pretty-print the result
 			result := map[string]interface{}{
-				"contract":            contract,
-				"entry":               entry,
-				"args":                txArgs,
-				"success":             resp.Result.Success,
-				"gas_used":            resp.Result.GasUsed,
-				"l0_credits":          resp.Result.L0Credits,
-				"acme_cost":           resp.Result.ACME,
-				"estimated_dn_bytes":  resp.Result.EstimatedDNBytes,
-				"events_count":        len(resp.Result.Events),
+				"contract":           contract,
+				"entry":              entry,
+				"args":               txArgs,
+				"success":            resp.Result.Success,
+				"gas_used":           resp.Result.GasUsed,
+				"l0_credits":         resp.Result.L0Credits,
+				"acme_cost":          resp.Result.ACME,
+				"estimated_dn_bytes": resp.Result.EstimatedDNBytes,
+				"events_count":       len(resp.Result.Events),
 			}
 
 			if resp.Result.Error != "" {
@@ -996,13 +996,13 @@ func simulateCommand() *cobra.Command {
 
 // SimulateRPCResult represents the result of accumen.simulate RPC call
 type SimulateRPCResult struct {
-	GasUsed          uint64             `json:"gasUsed"`
-	Events           []SimulateEvent    `json:"events"`
-	L0Credits        uint64             `json:"l0Credits"`
-	ACME             string             `json:"acme"`
-	EstimatedDNBytes uint64             `json:"estimatedDNBytes"`
-	Success          bool               `json:"success"`
-	Error            string             `json:"error,omitempty"`
+	GasUsed          uint64          `json:"gasUsed"`
+	Events           []SimulateEvent `json:"events"`
+	L0Credits        uint64          `json:"l0Credits"`
+	ACME             string          `json:"acme"`
+	EstimatedDNBytes uint64          `json:"estimatedDNBytes"`
+	Success          bool            `json:"success"`
+	Error            string          `json:"error,omitempty"`
 }
 
 // SimulateEvent represents an event in the simulate result
@@ -1199,11 +1199,11 @@ func auditWasmCommand() *cobra.Command {
 
 			// Prepare result
 			result := map[string]interface{}{
-				"file":        wasmPath,
-				"size":        len(wasmBytes),
-				"passed":      auditReport.Ok,
+				"file":         wasmPath,
+				"size":         len(wasmBytes),
+				"passed":       auditReport.Ok,
 				"memory_pages": auditReport.MemPages,
-				"exports":     auditReport.Exports,
+				"exports":      auditReport.Exports,
 			}
 
 			if len(auditReport.Reasons) > 0 {
@@ -1418,9 +1418,9 @@ func snapshotListCommand() *cobra.Command {
 
 			for _, snapshot := range snapshots {
 				snapshotData := map[string]interface{}{
-					"filename":  snapshot.Filename,
-					"size":      snapshot.Size,
-					"mod_time":  snapshot.ModTime.Format(time.RFC3339),
+					"filename": snapshot.Filename,
+					"size":     snapshot.Size,
+					"mod_time": snapshot.ModTime.Format(time.RFC3339),
 				}
 
 				if snapshot.Meta != nil {

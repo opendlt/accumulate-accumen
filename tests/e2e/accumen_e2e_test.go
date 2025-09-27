@@ -88,7 +88,7 @@ func TestAccumenBasicFlow(t *testing.T) {
 func TestAccumenConcurrentTransactions(t *testing.T) {
 	config := harness.DefaultHarnessConfig("concurrent_test")
 	config.BlockTime = 100 * time.Millisecond // Very fast blocks
-	config.MaxTransactions = 50 // Allow more transactions per block
+	config.MaxTransactions = 50               // Allow more transactions per block
 	config.Timeout = 30 * time.Second
 
 	h, err := harness.NewTestHarness(t, config)

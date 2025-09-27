@@ -22,32 +22,32 @@ const (
 
 // EndpointHealth tracks the health status of an endpoint
 type EndpointHealth struct {
-	URL           string
-	Healthy       bool
-	LastCheck     time.Time
-	FailureCount  int
-	NextRetry     time.Time
-	ResponseTime  time.Duration
+	URL          string
+	Healthy      bool
+	LastCheck    time.Time
+	FailureCount int
+	NextRetry    time.Time
+	ResponseTime time.Duration
 }
 
 // RoundRobin manages round-robin selection of healthy endpoints with health checking
 type RoundRobin struct {
-	mu          sync.RWMutex
-	endpoints   []*EndpointHealth
-	current     int
-	logger      *logz.Logger
+	mu        sync.RWMutex
+	endpoints []*EndpointHealth
+	current   int
+	logger    *logz.Logger
 
 	// Configuration
 	healthCheckInterval time.Duration
 	healthCheckTimeout  time.Duration
-	maxFailures        int
-	backoffDuration    time.Duration
+	maxFailures         int
+	backoffDuration     time.Duration
 
 	// Proxy discovery
-	source    Source
-	proxyURL  string
+	source     Source
+	proxyURL   string
 	staticURLs []string
-	wsPath    string
+	wsPath     string
 
 	// Background tasks
 	ctx    context.Context
@@ -90,14 +90,14 @@ func NewRoundRobin(cfg *Config) *RoundRobin {
 		logger:              logz.New(logz.INFO, "l0-endpoints"),
 		healthCheckInterval: cfg.HealthCheckInterval,
 		healthCheckTimeout:  cfg.HealthCheckTimeout,
-		maxFailures:        cfg.MaxFailures,
-		backoffDuration:    cfg.BackoffDuration,
-		source:             cfg.Source,
-		proxyURL:           cfg.ProxyURL,
-		staticURLs:         cfg.StaticURLs,
-		wsPath:             cfg.WSPath,
-		ctx:                ctx,
-		cancel:             cancel,
+		maxFailures:         cfg.MaxFailures,
+		backoffDuration:     cfg.BackoffDuration,
+		source:              cfg.Source,
+		proxyURL:            cfg.ProxyURL,
+		staticURLs:          cfg.StaticURLs,
+		wsPath:              cfg.WSPath,
+		ctx:                 ctx,
+		cancel:              cancel,
 	}
 
 	return rr
@@ -259,8 +259,8 @@ func (rr *RoundRobin) discover() error {
 			newEndpoints[i] = existing
 		} else {
 			newEndpoints[i] = &EndpointHealth{
-				URL:      url,
-				Healthy:  true, // Assume healthy initially
+				URL:       url,
+				Healthy:   true, // Assume healthy initially
 				LastCheck: time.Time{},
 			}
 		}

@@ -12,9 +12,9 @@ import (
 
 // Badger key prefixes for mempool storage
 var (
-	prefixPending = []byte("mp:pending:")    // Pending transactions queue
-	prefixIndex   = []byte("mp:index:")      // Hash to sequence number index
-	prefixSeq     = []byte("mp:seq")         // Current sequence counter
+	prefixPending = []byte("mp:pending:") // Pending transactions queue
+	prefixIndex   = []byte("mp:index:")   // Hash to sequence number index
+	prefixSeq     = []byte("mp:seq")      // Current sequence counter
 )
 
 // PersistentMempool provides a Badger-backed persistent transaction queue
@@ -25,7 +25,7 @@ type PersistentMempool struct {
 
 // TxRecord represents a transaction record with metadata
 type TxRecord struct {
-	Tx        l1.Tx `json:"tx" cbor:"tx"`
+	Tx        l1.Tx  `json:"tx" cbor:"tx"`
 	Hash      []byte `json:"hash" cbor:"hash"`
 	Sequence  uint64 `json:"sequence" cbor:"sequence"`
 	Timestamp int64  `json:"timestamp" cbor:"timestamp"`

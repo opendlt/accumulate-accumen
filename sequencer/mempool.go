@@ -12,30 +12,30 @@ import (
 
 // Transaction represents a transaction in the mempool
 type Transaction struct {
-	ID          string    `json:"id"`
-	From        string    `json:"from"`
-	To          string    `json:"to"`
-	Data        []byte    `json:"data"`
-	GasLimit    uint64    `json:"gas_limit"`
-	GasPrice    uint64    `json:"gas_price"`
-	Nonce       uint64    `json:"nonce"`
-	Signature   []byte    `json:"signature"`
-	Hash        []byte    `json:"hash"`
-	Size        uint64    `json:"size"`
-	ReceivedAt  time.Time `json:"received_at"`
-	Priority    uint64    `json:"priority"`
+	ID         string    `json:"id"`
+	From       string    `json:"from"`
+	To         string    `json:"to"`
+	Data       []byte    `json:"data"`
+	GasLimit   uint64    `json:"gas_limit"`
+	GasPrice   uint64    `json:"gas_price"`
+	Nonce      uint64    `json:"nonce"`
+	Signature  []byte    `json:"signature"`
+	Hash       []byte    `json:"hash"`
+	Size       uint64    `json:"size"`
+	ReceivedAt time.Time `json:"received_at"`
+	Priority   uint64    `json:"priority"`
 }
 
 // Mempool manages pending transactions for the sequencer
 type Mempool struct {
-	mu          sync.RWMutex
-	config      MempoolConfig
-	creditMgr   *pricing.CreditManager
+	mu        sync.RWMutex
+	config    MempoolConfig
+	creditMgr *pricing.CreditManager
 
 	// Transaction storage
-	transactions map[string]*Transaction        // by tx hash
-	byAccount    map[string][]*Transaction      // by account address
-	byPriority   []*Transaction                 // sorted by priority
+	transactions map[string]*Transaction   // by tx hash
+	byAccount    map[string][]*Transaction // by account address
+	byPriority   []*Transaction            // sorted by priority
 
 	// Metrics
 	totalAdded   uint64
@@ -43,31 +43,31 @@ type Mempool struct {
 	totalSize    uint64
 
 	// Background processing
-	running   bool
-	stopChan  chan struct{}
+	running       bool
+	stopChan      chan struct{}
 	cleanupTicker *time.Ticker
 }
 
 // MempoolStats contains mempool statistics
 type MempoolStats struct {
-	TotalTransactions int           `json:"total_transactions"`
-	TotalSize         uint64        `json:"total_size"`
-	AverageGasPrice   uint64        `json:"average_gas_price"`
+	TotalTransactions int            `json:"total_transactions"`
+	TotalSize         uint64         `json:"total_size"`
+	AverageGasPrice   uint64         `json:"average_gas_price"`
 	PendingByAccount  map[string]int `json:"pending_by_account"`
-	TotalAdded        uint64        `json:"total_added"`
-	TotalRemoved      uint64        `json:"total_removed"`
-	OldestTransaction time.Time     `json:"oldest_transaction"`
+	TotalAdded        uint64         `json:"total_added"`
+	TotalRemoved      uint64         `json:"total_removed"`
+	OldestTransaction time.Time      `json:"oldest_transaction"`
 }
 
 // NewMempool creates a new mempool instance
 func NewMempool(config MempoolConfig, creditMgr *pricing.CreditManager) *Mempool {
 	return &Mempool{
-		config:      config,
-		creditMgr:   creditMgr,
+		config:       config,
+		creditMgr:    creditMgr,
 		transactions: make(map[string]*Transaction),
-		byAccount:   make(map[string][]*Transaction),
-		byPriority:  make([]*Transaction, 0),
-		stopChan:    make(chan struct{}),
+		byAccount:    make(map[string][]*Transaction),
+		byPriority:   make([]*Transaction, 0),
+		stopChan:     make(chan struct{}),
 	}
 }
 

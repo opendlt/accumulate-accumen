@@ -20,16 +20,16 @@ type Meter struct {
 // Config defines gas costs for different operations
 type Config struct {
 	// Basic operation costs
-	BaseGas      uint64
-	MemoryGas    uint64
-	ComputeGas   uint64
-	StorageGas   uint64
+	BaseGas    uint64
+	MemoryGas  uint64
+	ComputeGas uint64
+	StorageGas uint64
 
 	// Host function costs
-	GetGas       uint64
-	SetGas       uint64
-	DeleteGas    uint64
-	LogGas       uint64
+	GetGas    uint64
+	SetGas    uint64
+	DeleteGas uint64
+	LogGas    uint64
 }
 
 // DefaultGasConfig returns a default gas configuration

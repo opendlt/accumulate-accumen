@@ -16,15 +16,15 @@ import (
 // Config defines the configuration for the Accumen sequencer
 type Config struct {
 	// Sequencer identity and networking
-	SequencerID   string `json:"sequencer_id"`
-	ListenAddr    string `json:"listen_addr"`
-	MaxPeers      int    `json:"max_peers"`
+	SequencerID string `json:"sequencer_id"`
+	ListenAddr  string `json:"listen_addr"`
+	MaxPeers    int    `json:"max_peers"`
 
 	// Block production settings
-	BlockTime         time.Duration `json:"block_time"`
-	MaxBlockSize      uint64        `json:"max_block_size"`
-	MaxTransactions   int           `json:"max_transactions"`
-	MinConfirmations  int           `json:"min_confirmations"`
+	BlockTime        time.Duration `json:"block_time"`
+	MaxBlockSize     uint64        `json:"max_block_size"`
+	MaxTransactions  int           `json:"max_transactions"`
+	MinConfirmations int           `json:"min_confirmations"`
 
 	// Mempool configuration
 	Mempool MempoolConfig `json:"mempool"`
@@ -39,10 +39,10 @@ type Config struct {
 	Registry RegistryConfig `json:"registry"`
 
 	// Monitoring and logging
-	MetricsAddr   string        `json:"metrics_addr"`
-	LogLevel      string        `json:"log_level"`
-	EnableProfile bool          `json:"enable_profile"`
-	ProfileAddr   string        `json:"profile_addr"`
+	MetricsAddr   string `json:"metrics_addr"`
+	LogLevel      string `json:"log_level"`
+	EnableProfile bool   `json:"enable_profile"`
+	ProfileAddr   string `json:"profile_addr"`
 }
 
 // MempoolConfig defines mempool-specific configuration
@@ -110,10 +110,10 @@ func DefaultConfig() *Config {
 		ListenAddr:  "0.0.0.0:8080",
 		MaxPeers:    50,
 
-		BlockTime:         2 * time.Second,
-		MaxBlockSize:      1024 * 1024, // 1MB
-		MaxTransactions:   1000,
-		MinConfirmations:  1,
+		BlockTime:        2 * time.Second,
+		MaxBlockSize:     1024 * 1024, // 1MB
+		MaxTransactions:  1000,
+		MinConfirmations: 1,
 
 		Mempool: MempoolConfig{
 			MaxSize:          10000,
@@ -140,9 +140,9 @@ func DefaultConfig() *Config {
 		},
 
 		Bridge: BridgeConfig{
-			Client:  *l0api.DefaultClientConfig("https://mainnet.accumulatenetwork.io"),
-			Pricing: *pricing.DefaultCreditConfig(),
-			Stager:  *outputs.DefaultStagerConfig(),
+			Client:    *l0api.DefaultClientConfig("https://mainnet.accumulatenetwork.io"),
+			Pricing:   *pricing.DefaultCreditConfig(),
+			Stager:    *outputs.DefaultStagerConfig(),
 			Submitter: *outputs.DefaultSubmitterConfig(),
 
 			EnableBridge:     true,

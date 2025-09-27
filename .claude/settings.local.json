@@ -2,7 +2,22 @@
   "permissions": {
     "allow": [
       "Bash(go list:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(go env:*)",
+      "Read(//c/Dev/accumulate-accumen/**)",
+      "Read(//c/AccuWS//**)",
+      "Read(//c/AccuWS/**)",
+      "Bash(go vet:*)",
+      "Bash(go build:*)",
+      "Bash(go doc:*)",
+      "Bash(go test:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git diff:*)",
+      "Bash(git checkout:*)",
+      "Bash(go fmt:*)",
+      "Bash('accumen','accumen-follower','accucli')",
+      "Bash(ForEach-Object { Write-Host \"==> building $_\" -ForegroundColor Cyan)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

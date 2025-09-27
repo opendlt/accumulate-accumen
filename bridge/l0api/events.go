@@ -34,11 +34,11 @@ type Status struct {
 
 // subscription represents an active transaction subscription
 type subscription struct {
-	txid     string
-	ch       chan Status
-	cancel   context.CancelFunc
-	ctx      context.Context
-	created  time.Time
+	txid    string
+	ch      chan Status
+	cancel  context.CancelFunc
+	ctx     context.Context
+	created time.Time
 }
 
 // ManagerConfig defines configuration for the events manager
@@ -50,10 +50,10 @@ type ManagerConfig struct {
 	MaxReconnects     int // 0 = unlimited
 
 	// Connection health settings
-	PingInterval     time.Duration
-	PingTimeout      time.Duration
-	ReadTimeout      time.Duration
-	WriteTimeout     time.Duration
+	PingInterval time.Duration
+	PingTimeout  time.Duration
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 
 	// Subscription settings
 	SubscriptionTimeout time.Duration
@@ -84,17 +84,17 @@ func DefaultManagerConfig(wsEndpoint string) *ManagerConfig {
 
 // Manager manages WebSocket connections with auto-reconnect and individual subscription channels
 type Manager struct {
-	mu              sync.RWMutex
-	config          *ManagerConfig
-	conn            *websocket.Conn
-	subscriptions   map[string]*subscription
-	connected       bool
-	reconnectCount  int
-	logger          *logz.Logger
-	ctx             context.Context
-	cancel          context.CancelFunc
-	shutdownCh      chan struct{}
-	doneCh          chan struct{}
+	mu             sync.RWMutex
+	config         *ManagerConfig
+	conn           *websocket.Conn
+	subscriptions  map[string]*subscription
+	connected      bool
+	reconnectCount int
+	logger         *logz.Logger
+	ctx            context.Context
+	cancel         context.CancelFunc
+	shutdownCh     chan struct{}
+	doneCh         chan struct{}
 
 	// Connection state
 	lastConnectTime time.Time
@@ -104,16 +104,16 @@ type Manager struct {
 
 // EventSubscriber manages WebSocket connections for transaction confirmations
 type EventSubscriber struct {
-	mu              sync.RWMutex
-	wsURL           string
-	conn            *websocket.Conn
-	confirmationCh  chan *TxConfirmation
-	subscriptions   map[string]bool // Track which TxIDs we're subscribed to
-	logger          *logz.Logger
-	reconnectDelay  time.Duration
-	pingInterval    time.Duration
-	maxReconnects   int
-	connected       bool
+	mu             sync.RWMutex
+	wsURL          string
+	conn           *websocket.Conn
+	confirmationCh chan *TxConfirmation
+	subscriptions  map[string]bool // Track which TxIDs we're subscribed to
+	logger         *logz.Logger
+	reconnectDelay time.Duration
+	pingInterval   time.Duration
+	maxReconnects  int
+	connected      bool
 }
 
 // NewEventSubscriber creates a new WebSocket event subscriber
@@ -501,9 +501,9 @@ func (es *EventSubscriber) GetSubscriptionCount() int {
 
 // EventSubscriberStats contains statistics about the event subscriber
 type EventSubscriberStats struct {
-	Connected       bool `json:"connected"`
-	SubscriptionCount int  `json:"subscription_count"`
-	WebSocketURL    string `json:"websocket_url"`
+	Connected         bool   `json:"connected"`
+	SubscriptionCount int    `json:"subscription_count"`
+	WebSocketURL      string `json:"websocket_url"`
 }
 
 // GetStats returns event subscriber statistics

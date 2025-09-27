@@ -333,7 +333,7 @@ func RestoreFromSnapshot(path string, kv KVStore) error {
 			return fmt.Errorf("failed to read snapshot entry: %w", err)
 		}
 
-		if err := kv.Put(string(key), value); err != nil {
+		if err := kv.Put(key, value); err != nil {
 			return fmt.Errorf("failed to restore key %s: %w", string(key), err)
 		}
 
@@ -362,7 +362,7 @@ func ClearKVStore(kv KVStore) error {
 
 	// Delete all keys
 	for _, key := range keys {
-		if err := kv.Delete(key); err != nil {
+		if err := kv.Delete([]byte(key)); err != nil {
 			return fmt.Errorf("failed to delete key %s: %w", key, err)
 		}
 	}

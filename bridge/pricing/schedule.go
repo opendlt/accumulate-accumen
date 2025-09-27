@@ -12,13 +12,13 @@ import (
 
 // Schedule defines gas costs and pricing for operations
 type Schedule struct {
-	ID        string             `json:"id"`
-	Version   int                `json:"version"`
-	GCR       float64            `json:"gcr"`       // Gas-to-Credits Ratio
-	HostCosts map[string]uint64  `json:"host_costs"` // Host function costs
-	PerByte   PerByteSchedule    `json:"per_byte"`   // Per-byte operation costs
-	CreatedAt time.Time          `json:"created_at"`
-	UpdatedAt time.Time          `json:"updated_at"`
+	ID        string            `json:"id"`
+	Version   int               `json:"version"`
+	GCR       float64           `json:"gcr"`        // Gas-to-Credits Ratio
+	HostCosts map[string]uint64 `json:"host_costs"` // Host function costs
+	PerByte   PerByteSchedule   `json:"per_byte"`   // Per-byte operation costs
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
 }
 
 // PerByteSchedule defines per-byte costs for different operations
@@ -34,13 +34,13 @@ func DefaultSchedule() *Schedule {
 		Version: 1,
 		GCR:     150.0, // 150 credits per 1000 gas units
 		HostCosts: map[string]uint64{
-			"host.get":        1000,  // 1000 gas for KV get
-			"host.put":        2000,  // 2000 gas for KV put
-			"host.delete":     1500,  // 1500 gas for KV delete
-			"host.emit_event": 500,   // 500 gas for emitting event
-			"host.stage_op":   3000,  // 3000 gas for staging L0 operation
-			"host.charge_gas": 100,   // 100 gas for gas charging overhead
-			"host.log":        200,   // 200 gas for logging
+			"host.get":        1000, // 1000 gas for KV get
+			"host.put":        2000, // 2000 gas for KV put
+			"host.delete":     1500, // 1500 gas for KV delete
+			"host.emit_event": 500,  // 500 gas for emitting event
+			"host.stage_op":   3000, // 3000 gas for staging L0 operation
+			"host.charge_gas": 100,  // 100 gas for gas charging overhead
+			"host.log":        200,  // 200 gas for logging
 		},
 		PerByte: PerByteSchedule{
 			Read:  10, // 10 gas per byte read

@@ -29,19 +29,19 @@ var (
 )
 
 type StressTestResult struct {
-	TotalTxs       int64
-	SuccessfulTxs  int64
-	FailedTxs      int64
-	ErrorRate      float64
-	LatencyP50     time.Duration
-	LatencyP95     time.Duration
-	LatencyP99     time.Duration
-	MeanLatency    time.Duration
-	ActualTPS      float64
-	TestDuration   time.Duration
-	ContractsUsed  int
-	PayloadSize    int
-	ErrorsByType   map[string]int64
+	TotalTxs      int64
+	SuccessfulTxs int64
+	FailedTxs     int64
+	ErrorRate     float64
+	LatencyP50    time.Duration
+	LatencyP95    time.Duration
+	LatencyP99    time.Duration
+	MeanLatency   time.Duration
+	ActualTPS     float64
+	TestDuration  time.Duration
+	ContractsUsed int
+	PayloadSize   int
+	ErrorsByType  map[string]int64
 }
 
 type TxResult struct {
@@ -425,7 +425,7 @@ func generateMockWASM(size int) []byte {
 	// Generate a mock WASM module for testing
 	// In a real implementation, this would be actual compiled WASM
 	mockWASM := make([]byte, size)
-	copy(mockWASM[:4], []byte{0x00, 0x61, 0x73, 0x6d}) // WASM magic bytes
+	copy(mockWASM[:4], []byte{0x00, 0x61, 0x73, 0x6d})  // WASM magic bytes
 	copy(mockWASM[4:8], []byte{0x01, 0x00, 0x00, 0x00}) // WASM version
 
 	// Fill rest with random data

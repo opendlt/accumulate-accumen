@@ -17,9 +17,9 @@ import (
 
 // VDKDaemon wraps an Accumen sequencer in a VDK daemon
 type VDKDaemon struct {
-	sequencer *sequencer.Sequencer
+	sequencer  *sequencer.Sequencer
 	httpServer *http.Server
-	logger    logger.Logger
+	logger     logger.Logger
 }
 
 // NewVDKDaemon creates a new VDK daemon wrapper

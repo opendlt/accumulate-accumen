@@ -48,14 +48,14 @@ func NewHostAPI(gasMeter GasMeter, kvStore KVStore, querier *l0api.Querier, sche
 // ExportHostFunctions exports host functions to the WASM runtime
 func (h *HostAPI) ExportHostFunctions() map[string]interface{} {
 	return map[string]interface{}{
-		"accuwasm_get":              h.get,
-		"accuwasm_set":              h.set,
-		"accuwasm_delete":           h.delete,
-		"accuwasm_log":              h.log,
-		"l0_read_account_json":      h.l0ReadAccountJSON,
-		"l0_get_balance":            h.l0GetBalance,
-		"l0_read_data_entry":        h.l0ReadDataEntry,
-		"l0_credits_quote":          h.l0CreditsQuote,
+		"accuwasm_get":         h.get,
+		"accuwasm_set":         h.set,
+		"accuwasm_delete":      h.delete,
+		"accuwasm_log":         h.log,
+		"l0_read_account_json": h.l0ReadAccountJSON,
+		"l0_get_balance":       h.l0GetBalance,
+		"l0_read_data_entry":   h.l0ReadDataEntry,
+		"l0_credits_quote":     h.l0CreditsQuote,
 	}
 }
 

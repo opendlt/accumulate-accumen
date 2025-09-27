@@ -8,7 +8,6 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/crypto/signer"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/address"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/types/encoding"
 )
 
 // WARNING: This is a development-only signer implementation.
@@ -35,7 +34,7 @@ func NewFromHex(hexKey string) (*Signer, error) {
 	}
 
 	// Create new signer using the updated interface
-	newSigner, err := signer.NewDevKeySignerFromKey(hexKey)
+	newSigner, err := signer.NewDevKeySignerFromKey(hexKey, "dev")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new signer: %w", err)
 	}
@@ -69,7 +68,8 @@ func NewFromHex(hexKey string) (*Signer, error) {
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 
 	// Calculate key hash for Accumulate addressing
-	keyHash := address.FromED25519PublicKey(publicKey)
+	keyHashAddr := address.FromED25519PublicKey(publicKey)
+	keyHash, _ := keyHashAddr.GetPublicKey() // Get []byte representation
 
 	legacySigner := &Signer{
 		privateKey: privateKey,
@@ -86,31 +86,14 @@ func (s *Signer) AsNewSigner() signer.Signer {
 	return s.newSigner
 }
 
-// Sign signs an envelope using the ed25519 private key
-func (s *Signer) Sign(env *build.EnvelopeBuilder) error {
-	if env == nil {
-		return fmt.Errorf("envelope cannot be nil")
+// Sign signs a signature builder using the ed25519 private key
+func (s *Signer) Sign(sigBuilder *build.SignatureBuilder) error {
+	if sigBuilder == nil {
+		return fmt.Errorf("signature builder cannot be nil")
 	}
 
-	// Get the transaction data to sign
-	txData, err := env.Transaction().MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("failed to marshal transaction for signing: %w", err)
-	}
-
-	// Sign the transaction data
-	signature := ed25519.Sign(s.privateKey, txData)
-
-	// Create Accumulate signature
-	accSignature := &encoding.ED25519Signature{
-		PublicKey: s.publicKey,
-		Signature: signature,
-	}
-
-	// Add signature to envelope
-	env.AddSignature(accSignature)
-
-	return nil
+	// Use the new signer interface for forward compatibility
+	return s.newSigner.SignEnvelope(sigBuilder)
 }
 
 // GetPublicKey returns the public key
@@ -148,7 +131,8 @@ func NewKeyPair() (*Signer, string, error) {
 	}
 
 	// Calculate key hash
-	keyHash := address.FromED25519PublicKey(publicKey)
+	keyHashAddr := address.FromED25519PublicKey(publicKey)
+	keyHash, _ := keyHashAddr.GetPublicKey() // Get []byte representation
 
 	signer := &Signer{
 		privateKey: privateKey,

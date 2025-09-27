@@ -10,13 +10,13 @@ import (
 
 // CrossLinkMetadata represents metadata embedded in L0 transactions that links back to L1
 type CrossLinkMetadata struct {
-	Version     string `json:"version"`           // Metadata format version
-	L1TxHash    string `json:"l1TxHash"`          // Full L1 transaction hash (hex)
-	L1Height    uint64 `json:"l1Height"`          // L1 block height
-	L1Index     uint64 `json:"l1Index"`           // Transaction index within L1 block
-	ChainID     string `json:"chainId"`           // L1 chain identifier
-	ContractURL string `json:"contractUrl"`       // Contract that triggered this L0 operation
-	Timestamp   int64  `json:"timestamp"`         // Unix timestamp of L1 transaction
+	Version     string `json:"version"`     // Metadata format version
+	L1TxHash    string `json:"l1TxHash"`    // Full L1 transaction hash (hex)
+	L1Height    uint64 `json:"l1Height"`    // L1 block height
+	L1Index     uint64 `json:"l1Index"`     // Transaction index within L1 block
+	ChainID     string `json:"chainId"`     // L1 chain identifier
+	ContractURL string `json:"contractUrl"` // Contract that triggered this L0 operation
+	Timestamp   int64  `json:"timestamp"`   // Unix timestamp of L1 transaction
 }
 
 // WithMemo sets the memo field on a transaction builder
@@ -210,11 +210,11 @@ func WithL1Origin(builder build.TransactionBuilder, l1TxHash [32]byte, l1Height,
 
 // AccumenMetadata represents Accumen-specific metadata for L0 transactions
 type AccumenMetadata struct {
-	Version      string            `json:"version"`
-	Source       string            `json:"source"`       // "accumen-sequencer"
-	SequencerID  string            `json:"sequencerId"`  // Sequencer identifier
-	L1CrossLink  *CrossLinkMetadata `json:"l1CrossLink,omitempty"`
-	Custom       map[string]any    `json:"custom,omitempty"` // Custom metadata fields
+	Version     string             `json:"version"`
+	Source      string             `json:"source"`      // "accumen-sequencer"
+	SequencerID string             `json:"sequencerId"` // Sequencer identifier
+	L1CrossLink *CrossLinkMetadata `json:"l1CrossLink,omitempty"`
+	Custom      map[string]any     `json:"custom,omitempty"` // Custom metadata fields
 }
 
 // WithAccumenMetadata adds Accumen-specific metadata to a transaction

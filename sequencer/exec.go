@@ -25,22 +25,22 @@ import (
 
 // Block represents a block of transactions
 type Block struct {
-	Header       *BlockHeader    `json:"header"`
-	Transactions []*Transaction  `json:"transactions"`
-	Results      []*ExecResult   `json:"results"`
-	StateRoot    []byte          `json:"state_root"`
-	Size         uint64          `json:"size"`
+	Header       *BlockHeader   `json:"header"`
+	Transactions []*Transaction `json:"transactions"`
+	Results      []*ExecResult  `json:"results"`
+	StateRoot    []byte         `json:"state_root"`
+	Size         uint64         `json:"size"`
 }
 
 // BlockHeader contains block metadata
 type BlockHeader struct {
-	Height        uint64    `json:"height"`
-	PrevHash      []byte    `json:"prev_hash"`
-	Timestamp     time.Time `json:"timestamp"`
-	SequencerID   string    `json:"sequencer_id"`
-	TxCount       int       `json:"tx_count"`
-	GasUsed       uint64    `json:"gas_used"`
-	GasLimit      uint64    `json:"gas_limit"`
+	Height      uint64    `json:"height"`
+	PrevHash    []byte    `json:"prev_hash"`
+	Timestamp   time.Time `json:"timestamp"`
+	SequencerID string    `json:"sequencer_id"`
+	TxCount     int       `json:"tx_count"`
+	GasUsed     uint64    `json:"gas_used"`
+	GasLimit    uint64    `json:"gas_limit"`
 }
 
 // ExecResult represents the result of executing a transaction
@@ -59,9 +59,9 @@ type ExecResult struct {
 
 // ScopeCache caches authority scopes for contracts
 type ScopeCache struct {
-	mu     sync.RWMutex
-	cache  map[string]*scopeCacheEntry
-	ttl    time.Duration
+	mu    sync.RWMutex
+	cache map[string]*scopeCacheEntry
+	ttl   time.Duration
 }
 
 type scopeCacheEntry struct {
@@ -116,10 +116,10 @@ type ExecutionEngine struct {
 	scheduleProvider *pricing.ScheduleProvider
 
 	// Authority scope management
-	scopeCache     *ScopeCache
-	limitTracker   *outputs.OperationLimitTracker
-	dnClient       interface{} // DN client for scope fetching
-	l0Querier      *l0api.Querier
+	scopeCache      *ScopeCache
+	limitTracker    *outputs.OperationLimitTracker
+	dnClient        interface{} // DN client for scope fetching
+	l0Querier       *l0api.Querier
 	bindingRegistry *authority.Registry
 
 	// Scope refresh configuration
@@ -170,9 +170,9 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 	if scheduleProvider != nil {
 		schedule := scheduleProvider.Get()
 		gasConfig = gas.Config{
-			BaseGas:    config.Gas.BaseGas,
-			GCR:        schedule.GetGCR(),
-			HostCosts:  schedule.HostCosts,
+			BaseGas:      config.Gas.BaseGas,
+			GCR:          schedule.GetGCR(),
+			HostCosts:    schedule.HostCosts,
 			PerByteRead:  schedule.GetReadCost(),
 			PerByteWrite: schedule.GetWriteCost(),
 		}
@@ -933,13 +933,13 @@ func (e *ExecutionEngine) getDefaultAuthorities(account protocol.Account) ([]*ur
 
 // SimulateResult represents the result of a simulation
 type SimulateResult struct {
-	GasUsed     uint64              `json:"gasUsed"`
-	Events      []*runtime.Event    `json:"events"`
-	StagedOps   []*runtime.StagedOp `json:"stagedOps"`
-	L0Credits   uint64              `json:"l0Credits"`
-	L0Bytes     uint64              `json:"l0Bytes"`
-	Success     bool                `json:"success"`
-	Error       string              `json:"error,omitempty"`
+	GasUsed   uint64              `json:"gasUsed"`
+	Events    []*runtime.Event    `json:"events"`
+	StagedOps []*runtime.StagedOp `json:"stagedOps"`
+	L0Credits uint64              `json:"l0Credits"`
+	L0Bytes   uint64              `json:"l0Bytes"`
+	Success   bool                `json:"success"`
+	Error     string              `json:"error,omitempty"`
 }
 
 // Simulate executes a contract function simulation without committing state changes
@@ -1111,13 +1111,13 @@ func (e *ExecutionEngine) executeMigrationTransaction(ctx context.Context, contr
 
 	// Set up execution context with full state access
 	execCtx := &runtime.ExecutionContext{
-		KVStore:       e.kvStore,
-		ContractAddr:  contractAddr,
-		Caller:        "system", // System-initiated migration
-		GasLimit:      e.config.MaxGasPerTx,
-		BlockHeight:   e.GetCurrentHeight(),
-		BlockTime:     time.Now().Unix(),
-		Mode:          runtime.ModeExecute, // Full execution mode for migration
+		KVStore:      e.kvStore,
+		ContractAddr: contractAddr,
+		Caller:       "system", // System-initiated migration
+		GasLimit:     e.config.MaxGasPerTx,
+		BlockHeight:  e.GetCurrentHeight(),
+		BlockTime:    time.Now().Unix(),
+		Mode:         runtime.ModeExecute, // Full execution mode for migration
 	}
 
 	// Execute the migration function
@@ -1240,4 +1240,3 @@ func (e *ExecutionEngine) processStagedOperations(ctx context.Context, execCtx *
 
 	return nil
 }
-

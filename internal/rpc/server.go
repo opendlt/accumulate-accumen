@@ -41,52 +41,52 @@ const (
 	ErrCodeRateLimit    = -32429 // Too Many Requests
 
 	// Accumen-specific errors
-	ErrCodeAuthorityNotPermitted   = -33001 // L0 authority validation failed
-	ErrCodeContractPaused          = -33002 // Contract is paused/inactive
-	ErrCodeDeterminismViolation    = -33003 // WASM determinism audit failed
-	ErrCodeInsufficientCredits     = -33004 // Insufficient L0 credits
-	ErrCodeContractNotFound        = -33005 // Contract does not exist
-	ErrCodeInvalidContractAddress  = -33006 // Invalid contract address format
-	ErrCodeTransactionFailed       = -33007 // Transaction execution failed
-	ErrCodeGasLimitExceeded        = -33008 // Gas limit exceeded
-	ErrCodeInvalidNonce            = -33009 // Invalid or replay nonce
-	ErrCodeMempoolFull             = -33010 // Mempool is full
-	ErrCodeValidationFailed        = -33011 // Transaction validation failed
-	ErrCodeStateError              = -33012 // State operation failed
-	ErrCodeVersionNotFound         = -33013 // Contract version not found
-	ErrCodeMigrationFailed         = -33014 // Contract migration failed
-	ErrCodeUpgradeNotAllowed       = -33015 // Contract upgrade not permitted
-	ErrCodeNamespaceReserved       = -33016 // Namespace is reserved
-	ErrCodeServiceUnavailable      = -33017 // Service temporarily unavailable
+	ErrCodeAuthorityNotPermitted  = -33001 // L0 authority validation failed
+	ErrCodeContractPaused         = -33002 // Contract is paused/inactive
+	ErrCodeDeterminismViolation   = -33003 // WASM determinism audit failed
+	ErrCodeInsufficientCredits    = -33004 // Insufficient L0 credits
+	ErrCodeContractNotFound       = -33005 // Contract does not exist
+	ErrCodeInvalidContractAddress = -33006 // Invalid contract address format
+	ErrCodeTransactionFailed      = -33007 // Transaction execution failed
+	ErrCodeGasLimitExceeded       = -33008 // Gas limit exceeded
+	ErrCodeInvalidNonce           = -33009 // Invalid or replay nonce
+	ErrCodeMempoolFull            = -33010 // Mempool is full
+	ErrCodeValidationFailed       = -33011 // Transaction validation failed
+	ErrCodeStateError             = -33012 // State operation failed
+	ErrCodeVersionNotFound        = -33013 // Contract version not found
+	ErrCodeMigrationFailed        = -33014 // Contract migration failed
+	ErrCodeUpgradeNotAllowed      = -33015 // Contract upgrade not permitted
+	ErrCodeNamespaceReserved      = -33016 // Namespace is reserved
+	ErrCodeServiceUnavailable     = -33017 // Service temporarily unavailable
 )
 
 // Error code to message mapping
 var errorMessages = map[int]string{
-	ErrCodeParseError:              "Parse error",
-	ErrCodeInvalidRequest:          "Invalid Request",
-	ErrCodeMethodNotFound:          "Method not found",
-	ErrCodeInvalidParams:           "Invalid params",
-	ErrCodeInternalError:           "Internal error",
-	ErrCodeUnauthorized:            "Unauthorized",
-	ErrCodeForbidden:               "Forbidden",
-	ErrCodeRateLimit:               "Rate limit exceeded",
-	ErrCodeAuthorityNotPermitted:   "Authority not permitted",
-	ErrCodeContractPaused:          "Contract paused",
-	ErrCodeDeterminismViolation:    "Determinism violation",
-	ErrCodeInsufficientCredits:     "Insufficient credits",
-	ErrCodeContractNotFound:        "Contract not found",
-	ErrCodeInvalidContractAddress:  "Invalid contract address",
-	ErrCodeTransactionFailed:       "Transaction failed",
-	ErrCodeGasLimitExceeded:        "Gas limit exceeded",
-	ErrCodeInvalidNonce:            "Invalid nonce",
-	ErrCodeMempoolFull:             "Mempool full",
-	ErrCodeValidationFailed:        "Validation failed",
-	ErrCodeStateError:              "State error",
-	ErrCodeVersionNotFound:         "Version not found",
-	ErrCodeMigrationFailed:         "Migration failed",
-	ErrCodeUpgradeNotAllowed:       "Upgrade not allowed",
-	ErrCodeNamespaceReserved:       "Namespace reserved",
-	ErrCodeServiceUnavailable:      "Service unavailable",
+	ErrCodeParseError:             "Parse error",
+	ErrCodeInvalidRequest:         "Invalid Request",
+	ErrCodeMethodNotFound:         "Method not found",
+	ErrCodeInvalidParams:          "Invalid params",
+	ErrCodeInternalError:          "Internal error",
+	ErrCodeUnauthorized:           "Unauthorized",
+	ErrCodeForbidden:              "Forbidden",
+	ErrCodeRateLimit:              "Rate limit exceeded",
+	ErrCodeAuthorityNotPermitted:  "Authority not permitted",
+	ErrCodeContractPaused:         "Contract paused",
+	ErrCodeDeterminismViolation:   "Determinism violation",
+	ErrCodeInsufficientCredits:    "Insufficient credits",
+	ErrCodeContractNotFound:       "Contract not found",
+	ErrCodeInvalidContractAddress: "Invalid contract address",
+	ErrCodeTransactionFailed:      "Transaction failed",
+	ErrCodeGasLimitExceeded:       "Gas limit exceeded",
+	ErrCodeInvalidNonce:           "Invalid nonce",
+	ErrCodeMempoolFull:            "Mempool full",
+	ErrCodeValidationFailed:       "Validation failed",
+	ErrCodeStateError:             "State error",
+	ErrCodeVersionNotFound:        "Version not found",
+	ErrCodeMigrationFailed:        "Migration failed",
+	ErrCodeUpgradeNotAllowed:      "Upgrade not allowed",
+	ErrCodeNamespaceReserved:      "Namespace reserved",
+	ErrCodeServiceUnavailable:     "Service unavailable",
 }
 
 // NewRPCError creates a new RPC error with a standardized code
@@ -159,13 +159,13 @@ type RPCError struct {
 
 // StatusResult represents the result of accumen.status()
 type StatusResult struct {
-	ChainID        string    `json:"chainId"`
-	Height         uint64    `json:"height"`
-	LastAnchorTime *string   `json:"lastAnchorTime"`
-	BlockTime      string    `json:"blockTime"`
-	Running        bool      `json:"running"`
-	TxsProcessed   uint64    `json:"txsProcessed"`
-	Uptime         string    `json:"uptime"`
+	ChainID        string  `json:"chainId"`
+	Height         uint64  `json:"height"`
+	LastAnchorTime *string `json:"lastAnchorTime"`
+	BlockTime      string  `json:"blockTime"`
+	Running        bool    `json:"running"`
+	TxsProcessed   uint64  `json:"txsProcessed"`
+	Uptime         string  `json:"uptime"`
 }
 
 // SubmitTxParams represents parameters for accumen.submitTx()
@@ -179,7 +179,7 @@ type SubmitTxParams struct {
 	Timestamp int64                  `json:"timestamp,omitempty"`
 
 	// Raw CBOR format (base64 encoded)
-	RawCBOR   string `json:"rawCBOR,omitempty"`
+	RawCBOR string `json:"rawCBOR,omitempty"`
 
 	// Legacy fields for backward compatibility
 	From     string `json:"from,omitempty"`
@@ -195,18 +195,18 @@ type SubmitTxResult struct {
 // Supports both state key queries and contract function calls
 type QueryParams struct {
 	Contract string                 `json:"contract"`
-	Key      string                 `json:"key,omitempty"`      // For state queries
-	Entry    string                 `json:"entry,omitempty"`    // For function calls
-	Args     map[string]interface{} `json:"args,omitempty"`     // For function calls
+	Key      string                 `json:"key,omitempty"`   // For state queries
+	Entry    string                 `json:"entry,omitempty"` // For function calls
+	Args     map[string]interface{} `json:"args,omitempty"`  // For function calls
 }
 
 // QueryResult represents the result of accumen.query()
 type QueryResult struct {
-	Value    *string `json:"value"`
-	Exists   bool    `json:"exists"`
-	Type     string  `json:"type,omitempty"`
-	Events   []Event `json:"events,omitempty"`   // For contract function calls
-	GasUsed  uint64  `json:"gasUsed,omitempty"`  // For contract function calls
+	Value   *string `json:"value"`
+	Exists  bool    `json:"exists"`
+	Type    string  `json:"type,omitempty"`
+	Events  []Event `json:"events,omitempty"`  // For contract function calls
+	GasUsed uint64  `json:"gasUsed,omitempty"` // For contract function calls
 }
 
 // Event represents a contract event for query results
@@ -217,7 +217,7 @@ type Event struct {
 
 // DeployContractParams represents parameters for accumen.deployContract()
 type DeployContractParams struct {
-	Addr   string `json:"addr"`
+	Addr    string `json:"addr"`
 	WasmB64 string `json:"wasm_b64"`
 }
 
@@ -228,9 +228,9 @@ type DeployContractResult struct {
 
 // UpgradeContractParams represents parameters for accumen.upgradeContract()
 type UpgradeContractParams struct {
-	Addr        string                 `json:"addr"`
-	WasmB64     string                 `json:"wasm_b64"`
-	MigrateEntry *string               `json:"migrate_entry,omitempty"`
+	Addr         string                 `json:"addr"`
+	WasmB64      string                 `json:"wasm_b64"`
+	MigrateEntry *string                `json:"migrate_entry,omitempty"`
 	MigrateArgs  map[string]interface{} `json:"migrate_args,omitempty"`
 }
 
@@ -260,13 +260,13 @@ type SimulateParams struct {
 
 // SimulateResult represents the result of accumen.simulate()
 type SimulateResult struct {
-	GasUsed           uint64  `json:"gasUsed"`
-	Events            []Event `json:"events"`
-	L0Credits         uint64  `json:"l0Credits"`
-	ACME              string  `json:"acme"`
-	EstimatedDNBytes  uint64  `json:"estimatedDNBytes"`
-	Success           bool    `json:"success"`
-	Error             string  `json:"error,omitempty"`
+	GasUsed          uint64  `json:"gasUsed"`
+	Events           []Event `json:"events"`
+	L0Credits        uint64  `json:"l0Credits"`
+	ACME             string  `json:"acme"`
+	EstimatedDNBytes uint64  `json:"estimatedDNBytes"`
+	Success          bool    `json:"success"`
+	Error            string  `json:"error,omitempty"`
 }
 
 // ServerStats contains RPC server statistics
@@ -534,7 +534,7 @@ func (s *Server) handleStatus() (interface{}, *RPCError) {
 		result := &StatusResult{
 			ChainID:        "accumen-devnet-1", // TODO: get from config
 			Height:         indexerStats.CurrentHeight,
-			LastAnchorTime: nil, // Not applicable for followers
+			LastAnchorTime: nil,  // Not applicable for followers
 			BlockTime:      "5s", // TODO: get from config
 			Running:        indexerStats.Running,
 			TxsProcessed:   indexerStats.EntriesProcessed,
@@ -793,13 +793,13 @@ type GetL1ReceiptParams struct {
 
 // GetL1ReceiptResult represents the result of accumen.getL1Receipt()
 type GetL1ReceiptResult struct {
-	L1Hash      string                    `json:"l1Hash"`
-	DNTxID      string                    `json:"dnTxId"` // hex-encoded DN transaction ID
-	DNKey       string                    `json:"dnKey,omitempty"`
-	Contract    string                    `json:"contract,omitempty"`
-	Entry       string                    `json:"entry,omitempty"`
-	Metadata    *indexer.MetadataEntry    `json:"metadata,omitempty"`
-	AnchorTxIDs []string                  `json:"anchorTxIds,omitempty"` // hex-encoded anchor tx IDs
+	L1Hash      string                 `json:"l1Hash"`
+	DNTxID      string                 `json:"dnTxId"` // hex-encoded DN transaction ID
+	DNKey       string                 `json:"dnKey,omitempty"`
+	Contract    string                 `json:"contract,omitempty"`
+	Entry       string                 `json:"entry,omitempty"`
+	Metadata    *indexer.MetadataEntry `json:"metadata,omitempty"`
+	AnchorTxIDs []string               `json:"anchorTxIds,omitempty"` // hex-encoded anchor tx IDs
 }
 
 // GetTxReceiptParams represents parameters for accumen.getTxReceipt()
@@ -809,12 +809,12 @@ type GetTxReceiptParams struct {
 
 // GetTxReceiptResult represents the result of accumen.getTxReceipt()
 type GetTxReceiptResult struct {
-	Height  uint64        `json:"height"`
-	Index   int           `json:"index"`
+	Height  uint64         `json:"height"`
+	Index   int            `json:"index"`
 	Events  []ReceiptEvent `json:"events"`
-	GasUsed uint64        `json:"gasUsed"`
-	Error   string        `json:"error,omitempty"`
-	L0TxIDs []string      `json:"l0TxIds"`
+	GasUsed uint64         `json:"gasUsed"`
+	Error   string         `json:"error,omitempty"`
+	L0TxIDs []string       `json:"l0TxIds"`
 }
 
 // ReceiptEvent represents an event in the receipt result
@@ -916,7 +916,7 @@ func (s *Server) handleDeployContract(params interface{}) (interface{}, *RPCErro
 	}
 
 	// Validate size limits (1-2 MB)
-	const minSize = 1024        // 1 KB minimum
+	const minSize = 1024            // 1 KB minimum
 	const maxSize = 2 * 1024 * 1024 // 2 MB maximum
 	if len(wasmBytes) < minSize {
 		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM module too small: %d bytes (min: %d)", len(wasmBytes), minSize)}
@@ -1013,7 +1013,7 @@ func (s *Server) handleUpgradeContract(params interface{}) (interface{}, *RPCErr
 	}
 
 	// Validate size limits (1-2 MB)
-	const minSize = 1024        // 1 KB minimum
+	const minSize = 1024            // 1 KB minimum
 	const maxSize = 2 * 1024 * 1024 // 2 MB maximum
 	if len(wasmBytes) < minSize {
 		return nil, &RPCError{Code: -32602, Message: fmt.Sprintf("WASM module too small: %d bytes (min: %d)", len(wasmBytes), minSize)}

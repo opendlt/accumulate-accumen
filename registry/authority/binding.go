@@ -14,13 +14,13 @@ import (
 
 // Binding represents the binding of an L1 contract to an L0 authority
 type Binding struct {
-	Contract   *url.URL  `json:"contract"`            // L1 contract URL (acc://<adi>/accumen/<contract>)
-	KeyBook    *url.URL  `json:"keyBook"`             // L0 key book URL (acc://<adi>/book)
-	KeyPage    *url.URL  `json:"keyPage"`             // L0 key page URL (acc://<adi>/book/<page>)
-	PubKeyHash []byte    `json:"pubKeyHash"`          // ed25519 sha256-ripemd160 per Accumulate convention
-	Perms      []string  `json:"perms"`               // ["writeData","sendTokens","updateAuth"]
-	KeyAlias   string    `json:"keyAlias"`            // Keystore alias for the signing key
-	CreatedAt  time.Time `json:"createdAt"`           // When this binding was created
+	Contract   *url.URL  `json:"contract"`   // L1 contract URL (acc://<adi>/accumen/<contract>)
+	KeyBook    *url.URL  `json:"keyBook"`    // L0 key book URL (acc://<adi>/book)
+	KeyPage    *url.URL  `json:"keyPage"`    // L0 key page URL (acc://<adi>/book/<page>)
+	PubKeyHash []byte    `json:"pubKeyHash"` // ed25519 sha256-ripemd160 per Accumulate convention
+	Perms      []string  `json:"perms"`      // ["writeData","sendTokens","updateAuth"]
+	KeyAlias   string    `json:"keyAlias"`   // Keystore alias for the signing key
+	CreatedAt  time.Time `json:"createdAt"`  // When this binding was created
 }
 
 // PermissionType represents the types of L0 operations that can be permitted
@@ -188,11 +188,11 @@ func (b *Binding) Validate() error {
 
 // Registry manages authority bindings using the state KV store
 type Registry struct {
-	store state.KV
+	store state.KVStore
 }
 
 // NewRegistry creates a new authority binding registry
-func NewRegistry(store state.KV) *Registry {
+func NewRegistry(store state.KVStore) *Registry {
 	return &Registry{
 		store: store,
 	}
@@ -379,7 +379,7 @@ func (r *Registry) Update(contractURL *url.URL, updateFn func(*Binding) error) e
 
 // Stats returns statistics about the registry
 type Stats struct {
-	TotalBindings int            `json:"totalBindings"`
+	TotalBindings    int            `json:"totalBindings"`
 	PermissionCounts map[string]int `json:"permissionCounts"`
 }
 
@@ -391,7 +391,7 @@ func (r *Registry) GetStats() (*Stats, error) {
 	}
 
 	stats := &Stats{
-		TotalBindings: len(bindings),
+		TotalBindings:    len(bindings),
 		PermissionCounts: make(map[string]int),
 	}
 

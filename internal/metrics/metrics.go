@@ -10,32 +10,32 @@ import (
 // Global metrics exposed via expvar
 var (
 	// Counters
-	BlocksProduced    = expvar.NewInt("blocks_produced")
-	TxsExecuted       = expvar.NewInt("txs_executed")
-	L0Submitted       = expvar.NewInt("l0_submitted")
-	L0Failed          = expvar.NewInt("l0_failed")
-	AnchorsWritten    = expvar.NewInt("anchors_written")
-	WasmGasUsedTotal  = expvar.NewInt("wasm_gas_used_total")
+	BlocksProduced   = expvar.NewInt("blocks_produced")
+	TxsExecuted      = expvar.NewInt("txs_executed")
+	L0Submitted      = expvar.NewInt("l0_submitted")
+	L0Failed         = expvar.NewInt("l0_failed")
+	AnchorsWritten   = expvar.NewInt("anchors_written")
+	WasmGasUsedTotal = expvar.NewInt("wasm_gas_used_total")
 
 	// Gauges (using atomic values)
-	currentHeight     int64
-	lastAnchorTime    int64
-	followerHeight    int64
-	indexerEntries    int64
-	rpcRequestCount   int64
-	rpcErrorCount     int64
+	currentHeight   int64
+	lastAnchorTime  int64
+	followerHeight  int64
+	indexerEntries  int64
+	rpcRequestCount int64
+	rpcErrorCount   int64
 
 	// Expvar gauges
-	CurrentHeight     = expvar.NewInt("current_height")
-	LastAnchorTime    = expvar.NewInt("last_anchor_time_unix")
-	FollowerHeight    = expvar.NewInt("follower_height")
-	IndexerEntries    = expvar.NewInt("indexer_entries_processed")
-	RPCRequestCount   = expvar.NewInt("rpc_request_count")
-	RPCErrorCount     = expvar.NewInt("rpc_error_count")
+	CurrentHeight   = expvar.NewInt("current_height")
+	LastAnchorTime  = expvar.NewInt("last_anchor_time_unix")
+	FollowerHeight  = expvar.NewInt("follower_height")
+	IndexerEntries  = expvar.NewInt("indexer_entries_processed")
+	RPCRequestCount = expvar.NewInt("rpc_request_count")
+	RPCErrorCount   = expvar.NewInt("rpc_error_count")
 
 	// String metrics
-	NodeMode          = expvar.NewString("node_mode")
-	StartTime         = expvar.NewString("start_time")
+	NodeMode  = expvar.NewString("node_mode")
+	StartTime = expvar.NewString("start_time")
 )
 
 // Initialize metrics on package load
@@ -141,41 +141,41 @@ func Handler() http.Handler {
 
 // MetricsSnapshot represents a point-in-time snapshot of metrics
 type MetricsSnapshot struct {
-	BlocksProduced      int64     `json:"blocks_produced"`
-	TxsExecuted         int64     `json:"txs_executed"`
-	L0Submitted         int64     `json:"l0_submitted"`
-	L0Failed            int64     `json:"l0_failed"`
-	AnchorsWritten      int64     `json:"anchors_written"`
-	WasmGasUsedTotal    int64     `json:"wasm_gas_used_total"`
-	CurrentHeight       uint64    `json:"current_height"`
-	LastAnchorTime      int64     `json:"last_anchor_time_unix"`
-	FollowerHeight      uint64    `json:"follower_height"`
-	IndexerEntries      uint64    `json:"indexer_entries_processed"`
-	RPCRequestCount     int64     `json:"rpc_request_count"`
-	RPCErrorCount       int64     `json:"rpc_error_count"`
-	NodeMode            string    `json:"node_mode"`
-	StartTime           string    `json:"start_time"`
-	SnapshotTime        time.Time `json:"snapshot_time"`
+	BlocksProduced   int64     `json:"blocks_produced"`
+	TxsExecuted      int64     `json:"txs_executed"`
+	L0Submitted      int64     `json:"l0_submitted"`
+	L0Failed         int64     `json:"l0_failed"`
+	AnchorsWritten   int64     `json:"anchors_written"`
+	WasmGasUsedTotal int64     `json:"wasm_gas_used_total"`
+	CurrentHeight    uint64    `json:"current_height"`
+	LastAnchorTime   int64     `json:"last_anchor_time_unix"`
+	FollowerHeight   uint64    `json:"follower_height"`
+	IndexerEntries   uint64    `json:"indexer_entries_processed"`
+	RPCRequestCount  int64     `json:"rpc_request_count"`
+	RPCErrorCount    int64     `json:"rpc_error_count"`
+	NodeMode         string    `json:"node_mode"`
+	StartTime        string    `json:"start_time"`
+	SnapshotTime     time.Time `json:"snapshot_time"`
 }
 
 // GetSnapshot returns a snapshot of current metrics
 func GetSnapshot() *MetricsSnapshot {
 	return &MetricsSnapshot{
-		BlocksProduced:      BlocksProduced.Value(),
-		TxsExecuted:         TxsExecuted.Value(),
-		L0Submitted:         L0Submitted.Value(),
-		L0Failed:            L0Failed.Value(),
-		AnchorsWritten:      AnchorsWritten.Value(),
-		WasmGasUsedTotal:    WasmGasUsedTotal.Value(),
-		CurrentHeight:       GetCurrentHeight(),
-		LastAnchorTime:      GetLastAnchorTime(),
-		FollowerHeight:      GetFollowerHeight(),
-		IndexerEntries:      GetIndexerEntries(),
-		RPCRequestCount:     atomic.LoadInt64(&rpcRequestCount),
-		RPCErrorCount:       atomic.LoadInt64(&rpcErrorCount),
-		NodeMode:            NodeMode.Value(),
-		StartTime:           StartTime.Value(),
-		SnapshotTime:        time.Now().UTC(),
+		BlocksProduced:   BlocksProduced.Value(),
+		TxsExecuted:      TxsExecuted.Value(),
+		L0Submitted:      L0Submitted.Value(),
+		L0Failed:         L0Failed.Value(),
+		AnchorsWritten:   AnchorsWritten.Value(),
+		WasmGasUsedTotal: WasmGasUsedTotal.Value(),
+		CurrentHeight:    GetCurrentHeight(),
+		LastAnchorTime:   GetLastAnchorTime(),
+		FollowerHeight:   GetFollowerHeight(),
+		IndexerEntries:   GetIndexerEntries(),
+		RPCRequestCount:  atomic.LoadInt64(&rpcRequestCount),
+		RPCErrorCount:    atomic.LoadInt64(&rpcErrorCount),
+		NodeMode:         NodeMode.Value(),
+		StartTime:        StartTime.Value(),
+		SnapshotTime:     time.Now().UTC(),
 	}
 }
 
@@ -255,10 +255,10 @@ func Reset() {
 // Summary provides a human-readable summary of key metrics
 func Summary() map[string]interface{} {
 	return map[string]interface{}{
-		"node_mode":        NodeMode.Value(),
-		"blocks_produced":  BlocksProduced.Value(),
-		"txs_executed":     TxsExecuted.Value(),
-		"current_height":   GetCurrentHeight(),
+		"node_mode":       NodeMode.Value(),
+		"blocks_produced": BlocksProduced.Value(),
+		"txs_executed":    TxsExecuted.Value(),
+		"current_height":  GetCurrentHeight(),
 		"l0_submissions": map[string]interface{}{
 			"success": L0Submitted.Value(),
 			"failed":  L0Failed.Value(),

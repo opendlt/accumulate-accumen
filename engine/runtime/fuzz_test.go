@@ -254,7 +254,7 @@ func TestConcurrentDeterminism(t *testing.T) {
 	}
 
 	const (
-		numGoroutines = 10
+		numGoroutines          = 10
 		iterationsPerGoroutine = 20
 	)
 
@@ -349,7 +349,7 @@ func executeWASMModule(moduleWASM []byte, entry string, args []interface{}) (Exe
 		{
 			Type: "execution_started",
 			Data: map[string]interface{}{
-				"entry": entry,
+				"entry":      entry,
 				"args_count": len(args),
 			},
 		},
@@ -382,7 +382,7 @@ func executeWASMModule(moduleWASM []byte, entry string, args []interface{}) (Exe
 func generateCounterWASM() []byte {
 	// Mock WASM module for counter contract
 	wasm := make([]byte, 1024)
-	copy(wasm[:4], []byte{0x00, 0x61, 0x73, 0x6d}) // WASM magic
+	copy(wasm[:4], []byte{0x00, 0x61, 0x73, 0x6d})  // WASM magic
 	copy(wasm[4:8], []byte{0x01, 0x00, 0x00, 0x00}) // Version
 
 	// Add deterministic content based on "counter" functionality
@@ -431,7 +431,7 @@ func randomInt(min, max int) int {
 	if min >= max {
 		return min
 	}
-	return min + int(randomBytes(4)[0]) % (max - min)
+	return min + int(randomBytes(4)[0])%(max-min)
 }
 
 func randomFloat() float64 {
@@ -449,7 +449,7 @@ func randomString(minLen, maxLen int) string {
 	randomBytes := randomBytes(length)
 
 	for i := 0; i < length; i++ {
-		result[i] = chars[randomBytes[i] % byte(len(chars))]
+		result[i] = chars[randomBytes[i]%byte(len(chars))]
 	}
 
 	return string(result)
@@ -495,11 +495,11 @@ func BenchmarkStateHashing(b *testing.B) {
 // TestExecutionReproducibility ensures that execution results can be reproduced given the same conditions
 func TestExecutionReproducibility(t *testing.T) {
 	testCases := []struct {
-		name    string
-		module  []byte
-		entry   string
-		args    []interface{}
-		runs    int
+		name   string
+		module []byte
+		entry  string
+		args   []interface{}
+		runs   int
 	}{
 		{
 			name:   "SimpleIncrement",

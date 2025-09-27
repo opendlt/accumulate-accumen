@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 	"gitlab.com/accumulatenetwork/accumulate/test/simulator"
@@ -57,8 +57,8 @@ func TestAuthoritySandbox(t *testing.T) {
 	createADI := build.Transaction().
 		For(protocol.DnUrl()).
 		Body(&protocol.CreateIdentity{
-			Url:       adiURL,
-			KeyHash:   adiPubKey.Hash(),
+			Url:        adiURL,
+			KeyHash:    adiPubKey.Hash(),
 			KeyBookUrl: keyBookURL,
 		}).
 		SignWith(protocol.Faucet.JoinPath("tokens")).Version(1).Timestamp(1).PrivateKey(simulator.FaucetKey)
@@ -73,7 +73,7 @@ func TestAuthoritySandbox(t *testing.T) {
 	createKeyBook := build.Transaction().
 		For(adiURL).
 		Body(&protocol.CreateKeyBook{
-			Url:         keyBookURL,
+			Url:           keyBookURL,
 			PublicKeyHash: adiPubKey.Hash(),
 		}).
 		SignWith(adiURL).Version(1).Timestamp(2).PrivateKey(adiKey)
@@ -99,8 +99,8 @@ func TestAuthoritySandbox(t *testing.T) {
 	createTokens := build.Transaction().
 		For(adiURL).
 		Body(&protocol.CreateTokenAccount{
-			Url:         tokenURL,
-			TokenUrl:    protocol.AcmeUrl(),
+			Url:      tokenURL,
+			TokenUrl: protocol.AcmeUrl(),
 		}).
 		SignWith(adiURL).Version(2).Timestamp(4).PrivateKey(adiKey)
 
@@ -198,9 +198,9 @@ func TestAuthoritySandbox(t *testing.T) {
 			PerByteWrite: 2,
 		},
 		Runtime: sequencer.RuntimeConfig{
-			MaxMemory:    64 * 1024 * 1024, // 64MB
-			MaxStack:     1000,
-			MaxGlobals:   100,
+			MaxMemory:  64 * 1024 * 1024, // 64MB
+			MaxStack:   1000,
+			MaxGlobals: 100,
 		},
 		WorkerCount:    1,
 		EnableParallel: false,
@@ -333,14 +333,14 @@ func TestAuthoritySandbox(t *testing.T) {
 
 	// Create mock follower indexer
 	indexerConfig := &indexer.Config{
-		APIClient:     client,
-		KVStore:       state.NewMemoryKVStore(),
-		MetadataPath:  "acc://dn.acme/registry/metadata",
-		AnchorsPath:   "acc://dn.acme/registry/anchors",
-		ScanInterval:  1 * time.Second,
-		BatchSize:     10,
-		MaxRetries:    3,
-		RetryDelay:    1 * time.Second,
+		APIClient:    client,
+		KVStore:      state.NewMemoryKVStore(),
+		MetadataPath: "acc://dn.acme/registry/metadata",
+		AnchorsPath:  "acc://dn.acme/registry/anchors",
+		ScanInterval: 1 * time.Second,
+		BatchSize:    10,
+		MaxRetries:   3,
+		RetryDelay:   1 * time.Second,
 	}
 
 	followerIndexer, err := indexer.NewIndexer(indexerConfig)

@@ -62,52 +62,52 @@ type TestHarness struct {
 // HarnessConfig defines configuration for the test harness
 type HarnessConfig struct {
 	// Test environment settings
-	TestName       string
-	TempDir        string
-	CleanupOnExit  bool
-	LogLevel       string
-	Timeout        time.Duration
+	TestName      string
+	TempDir       string
+	CleanupOnExit bool
+	LogLevel      string
+	Timeout       time.Duration
 
 	// Sequencer configuration
-	BlockTime        time.Duration
-	MaxTransactions  int
-	EnableBridge     bool
-	GasLimit         uint64
-	MaxMemoryPages   uint32
+	BlockTime       time.Duration
+	MaxTransactions int
+	EnableBridge    bool
+	GasLimit        uint64
+	MaxMemoryPages  uint32
 
 	// L0 configuration
-	L0MockMode       bool
-	L0Endpoint       string
-	L0Timeout        time.Duration
-	RPCAddr          string
+	L0MockMode bool
+	L0Endpoint string
+	L0Timeout  time.Duration
+	RPCAddr    string
 
 	// WASM runtime configuration
-	WASMDebug        bool
-	WASMMaxMemory    uint32
+	WASMDebug     bool
+	WASMMaxMemory uint32
 
 	// Test data paths
-	ContractPath     string
-	TestDataPath     string
+	ContractPath string
+	TestDataPath string
 }
 
 // DefaultHarnessConfig returns default test harness configuration
 func DefaultHarnessConfig(testName string) *HarnessConfig {
 	return &HarnessConfig{
-		TestName:       testName,
-		CleanupOnExit:  true,
-		LogLevel:       "info",
-		Timeout:        30 * time.Second,
-		BlockTime:      time.Second,
+		TestName:        testName,
+		CleanupOnExit:   true,
+		LogLevel:        "info",
+		Timeout:         30 * time.Second,
+		BlockTime:       time.Second,
 		MaxTransactions: 100,
-		EnableBridge:   true, // Enable bridge for integration tests
-		GasLimit:       1000000,
-		MaxMemoryPages: 16,
-		L0MockMode:     true,
-		L0Endpoint:     "http://localhost:26660/v3",
-		L0Timeout:      10 * time.Second,
-		RPCAddr:        ":0", // Use random port
-		WASMDebug:      true,
-		WASMMaxMemory:  16,
+		EnableBridge:    true, // Enable bridge for integration tests
+		GasLimit:        1000000,
+		MaxMemoryPages:  16,
+		L0MockMode:      true,
+		L0Endpoint:      "http://localhost:26660/v3",
+		L0Timeout:       10 * time.Second,
+		RPCAddr:         ":0", // Use random port
+		WASMDebug:       true,
+		WASMMaxMemory:   16,
 	}
 }
 
@@ -548,7 +548,7 @@ func (sim *MockSimulator) handleJSONRPC(w http.ResponseWriter, r *http.Request) 
 
 	// Simple mock response
 	response := map[string]interface{}{
-		"id":     1,
+		"id": 1,
 		"result": map[string]interface{}{
 			"status": "ok",
 			"txHash": "0x" + hex.EncodeToString([]byte("mock_tx_hash")),

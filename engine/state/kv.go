@@ -1,22 +1,32 @@
 package state
 
 import (
+	"errors"
 	"fmt"
 	"sync"
+)
+
+// Common errors
+var (
+	ErrKeyNotFound = errors.New("key not found")
 )
 
 // KVStore defines the interface for key-value storage operations
 type KVStore interface {
 	Get(key []byte) ([]byte, error)
 	Set(key, value []byte) error
+	Put(key, value []byte) error // alias for Set
 	Delete(key []byte) error
+	Has(key []byte) (bool, error)  // alias for Exists
 	Exists(key []byte) (bool, error)
-	Iterator(prefix []byte) Iterator
+	Iterator(prefix []byte) (Iterator, error)
+	Iterate(fn func(key, value []byte) error) error // callback-based iteration
 	Close() error
 }
 
 // Iterator provides iteration over key-value pairs
 type Iterator interface {
+	Valid() bool
 	Next() bool
 	Key() []byte
 	Value() []byte
@@ -48,7 +58,7 @@ func (s *MemoryKVStore) Get(key []byte) ([]byte, error) {
 
 	value, exists := s.data[string(key)]
 	if !exists {
-		return nil, nil // Key not found, return nil without error
+		return nil, ErrKeyNotFound
 	}
 
 	// Return a copy to prevent external modification
@@ -87,6 +97,11 @@ func (s *MemoryKVStore) Delete(key []byte) error {
 	return nil
 }
 
+// Has checks if a key exists in the store (alias for Exists)
+func (s *MemoryKVStore) Has(key []byte) (bool, error) {
+	return s.Exists(key)
+}
+
 // Exists checks if a key exists in the store
 func (s *MemoryKVStore) Exists(key []byte) (bool, error) {
 	if len(key) == 0 {
@@ -101,7 +116,7 @@ func (s *MemoryKVStore) Exists(key []byte) (bool, error) {
 }
 
 // Iterator returns an iterator for keys with the given prefix
-func (s *MemoryKVStore) Iterator(prefix []byte) Iterator {
+func (s *MemoryKVStore) Iterator(prefix []byte) (Iterator, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -118,7 +133,25 @@ func (s *MemoryKVStore) Iterator(prefix []byte) Iterator {
 		store: s,
 		keys:  keys,
 		index: -1,
+	}, nil
+}
+
+// Put is an alias for Set to match the interface
+func (s *MemoryKVStore) Put(key, value []byte) error {
+	return s.Set(key, value)
+}
+
+// Iterate calls the function for each key-value pair with the given prefix
+func (s *MemoryKVStore) Iterate(fn func(key, value []byte) error) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for key, value := range s.data {
+		if err := fn([]byte(key), value); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // Close closes the store (no-op for memory store)
@@ -153,6 +186,11 @@ type memoryIterator struct {
 	keys  []string
 	index int
 	err   error
+}
+
+// Valid returns true if the iterator is positioned at a valid key-value pair
+func (it *memoryIterator) Valid() bool {
+	return it.err == nil && it.index >= 0 && it.index < len(it.keys)
 }
 
 // Next advances the iterator to the next key-value pair

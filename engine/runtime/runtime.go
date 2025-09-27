@@ -26,11 +26,11 @@ const (
 
 // Runtime represents the AccuWASM execution environment
 type Runtime struct {
-	wazeroRuntime wazero.Runtime
+	wazeroRuntime  wazero.Runtime
 	compiledModule wazero.CompiledModule
-	hostAPI       *host.API
-	config        *RuntimeConfig
-	moduleCache   *ModuleCache
+	hostAPI        *host.API
+	config         *RuntimeConfig
+	moduleCache    *ModuleCache
 }
 
 // RuntimeConfig defines runtime configuration (renamed from Config to avoid conflicts)
@@ -57,7 +57,7 @@ func DefaultConfig() *Config {
 		GasLimit:       1000000, // 1M gas units
 		QueryGasLimit:  100000,  // 100K gas units for queries (lower limit)
 		Debug:          false,
-		CacheSize:      16,      // 16 compiled modules in cache
+		CacheSize:      16, // 16 compiled modules in cache
 	}
 }
 
@@ -226,12 +226,12 @@ func NewRuntime(config *RuntimeConfig) (*Runtime, error) {
 	// Create wazero runtime with strict deterministic configuration
 	runtimeConfig := wazero.NewRuntimeConfig().
 		// Disable all non-deterministic features for strict determinism
-		WithFeatureSignExtensionOps(false).       // No sign extension ops
-		WithFeatureBulkMemoryOperations(false).   // No bulk memory operations
-		WithFeatureReferenceTypes(false).         // No reference types
-		WithFeatureSIMD(false).                   // No SIMD operations
-		WithFeatureMultiValue(false).             // No multi-value returns
-		WithFeatureMutableGlobals(false).         // No mutable globals
+		WithFeatureSignExtensionOps(false).     // No sign extension ops
+		WithFeatureBulkMemoryOperations(false). // No bulk memory operations
+		WithFeatureReferenceTypes(false).       // No reference types
+		WithFeatureSIMD(false).                 // No SIMD operations
+		WithFeatureMultiValue(false).           // No multi-value returns
+		WithFeatureMutableGlobals(false).       // No mutable globals
 		WithDebugInfoEnabled(config.Debug).
 		// Enable strict deterministic execution
 		WithCoreFeatures(wazero.CoreFeaturesV1) // Use only WASM 1.0 core features
@@ -343,12 +343,12 @@ func (r *Runtime) executeContractWithMode(ctx context.Context, wasmBytes []byte,
 	// Configure module with strict deterministic settings
 	moduleConfig := wazero.NewModuleConfig().
 		WithArgs("accuwasm").
-		WithStdin(nil).   // No stdin access
-		WithStdout(nil).  // No stdout access
-		WithStderr(nil).  // No stderr access
+		WithStdin(nil).                                                  // No stdin access
+		WithStdout(nil).                                                 // No stdout access
+		WithStderr(nil).                                                 // No stderr access
 		WithSysWalltime(func() (sec int64, nsec int32) { return 0, 0 }). // Fixed time
-		WithSysNanotime(func() int64 { return 0 }). // Fixed time
-		WithRandSource(nil). // No random source
+		WithSysNanotime(func() int64 { return 0 }).                      // Fixed time
+		WithRandSource(nil).                                             // No random source
 		// Limit memory strictly
 		WithMemoryLimitPages(prepared.Metadata.MaxMemoryPages)
 

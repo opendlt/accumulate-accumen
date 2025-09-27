@@ -59,15 +59,15 @@ func DefaultDNWriterConfig() *DNWriterConfig {
 
 // WriterStats contains statistics about the DN writer
 type WriterStats struct {
-	mu               sync.RWMutex
-	MetadataWritten  uint64
-	AnchorsWritten   uint64
-	BytesWritten     uint64
-	Errors           uint64
-	Retries          uint64
-	AverageLatency   time.Duration
-	LastWrite        time.Time
-	TotalCost        uint64
+	mu              sync.RWMutex
+	MetadataWritten uint64
+	AnchorsWritten  uint64
+	BytesWritten    uint64
+	Errors          uint64
+	Retries         uint64
+	AverageLatency  time.Duration
+	LastWrite       time.Time
+	TotalCost       uint64
 }
 
 // NewDNWriter creates a new DN writer
@@ -417,15 +417,15 @@ func (w *DNWriter) buildBlockHeaderData(header accumen.BlockHeader) ([]byte, err
 
 	// Build header anchor structure with cross-link information
 	anchor := map[string]interface{}{
-		"version":      "1.0.0",
-		"type":         "accumen_block_header",
-		"blockHeight":  header.Height,
-		"headerHash":   hex.EncodeToString(headerHash[:]),
-		"prevHash":     hex.EncodeToString(header.PrevHash),
-		"txsRoot":      hex.EncodeToString(header.TxsRoot),
-		"resultsRoot":  hex.EncodeToString(header.ResultsRoot),
-		"stateRoot":    hex.EncodeToString(header.StateRoot),
-		"timestamp":    timestamp.Format(time.RFC3339),
+		"version":     "1.0.0",
+		"type":        "accumen_block_header",
+		"blockHeight": header.Height,
+		"headerHash":  hex.EncodeToString(headerHash[:]),
+		"prevHash":    hex.EncodeToString(header.PrevHash),
+		"txsRoot":     hex.EncodeToString(header.TxsRoot),
+		"resultsRoot": hex.EncodeToString(header.ResultsRoot),
+		"stateRoot":   hex.EncodeToString(header.StateRoot),
+		"timestamp":   timestamp.Format(time.RFC3339),
 		"crossLink": map[string]interface{}{
 			"l1ChainId":    "accumen-l1",
 			"l1BlockHash":  hex.EncodeToString(headerHash[:]),

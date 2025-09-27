@@ -13,7 +13,7 @@ import (
 )
 
 // BuildWriteData creates a write data transaction envelope with proper header and memo
-func BuildWriteData(to *url.URL, data []byte, memo string, meta any) *build.EnvelopeBuilder {
+func BuildWriteData(to *url.URL, data []byte, memo string, meta any) *build.TransactionBuilder {
 	env := build.Transaction().
 		For(to).
 		Body(&protocol.WriteData{
@@ -36,7 +36,7 @@ func BuildWriteData(to *url.URL, data []byte, memo string, meta any) *build.Enve
 }
 
 // BuildSendTokens creates a send tokens transaction envelope with proper header and memo
-func BuildSendTokens(fromAcct *url.URL, toAcct *url.URL, amount string, token *url.URL, memo string) *build.EnvelopeBuilder {
+func BuildSendTokens(fromAcct *url.URL, toAcct *url.URL, amount string, token *url.URL, memo string) *build.TransactionBuilder {
 	env := build.Transaction().
 		For(fromAcct).
 		Body(&protocol.SendTokens{
@@ -63,7 +63,7 @@ func BuildSendTokens(fromAcct *url.URL, toAcct *url.URL, amount string, token *u
 }
 
 // BuildAddCredits creates an add credits transaction envelope with proper header and memo
-func BuildAddCredits(page *url.URL, fromToken *url.URL, amountCredits uint64, memo string) *build.EnvelopeBuilder {
+func BuildAddCredits(page *url.URL, fromToken *url.URL, amountCredits uint64, memo string) *build.TransactionBuilder {
 	env := build.Transaction().
 		For(page).
 		Body(&protocol.AddCredits{
@@ -118,7 +118,7 @@ func DecodeEnvelopeBase64(encodedEnvelope string) (*messaging.Envelope, error) {
 }
 
 // EncodeEnvelopeBuilderBase64 encodes an envelope builder to base64 string by completing it first
-func EncodeEnvelopeBuilderBase64(builder *build.EnvelopeBuilder) (string, error) {
+func EncodeEnvelopeBuilderBase64(builder *build.TransactionBuilder) (string, error) {
 	if builder == nil {
 		return "", fmt.Errorf("envelope builder cannot be nil")
 	}
@@ -134,7 +134,7 @@ func EncodeEnvelopeBuilderBase64(builder *build.EnvelopeBuilder) (string, error)
 }
 
 // DecodeToEnvelopeBuilder decodes a base64 string to an envelope and wraps it in a builder for further modifications
-func DecodeToEnvelopeBuilder(encodedEnvelope string) (*build.EnvelopeBuilder, error) {
+func DecodeToEnvelopeBuilder(encodedEnvelope string) (*build.TransactionBuilder, error) {
 	envelope, err := DecodeEnvelopeBase64(encodedEnvelope)
 	if err != nil {
 		return nil, err

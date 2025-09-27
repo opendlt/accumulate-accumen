@@ -42,12 +42,12 @@ func DefaultClientConfig() *ClientConfig {
 
 // RegistryPaths defines the standard registry paths for Accumen
 type RegistryPaths struct {
-	PluginIndex     string
-	PluginSpec      string
-	OpcodeTables    string
-	GasSchedules    string
-	ReservedNames   string
-	Anchors         string
+	PluginIndex   string
+	PluginSpec    string
+	OpcodeTables  string
+	GasSchedules  string
+	ReservedNames string
+	Anchors       string
 }
 
 // DefaultRegistryPaths returns the default registry paths

@@ -129,11 +129,11 @@ var forbiddenImports = map[string][]string{
 	"wasi_snapshot_preview1": {"*"}, // All WASI functions
 	"wasi_unstable":          {"*"}, // Legacy WASI
 	"env": {
-		"__wbindgen_throw",     // wasm-bindgen non-deterministic
-		"__wbindgen_rethrow",   // wasm-bindgen non-deterministic
-		"Math.random",          // Non-deterministic
-		"Date.now",             // Non-deterministic
-		"performance.now",      // Non-deterministic
+		"__wbindgen_throw",       // wasm-bindgen non-deterministic
+		"__wbindgen_rethrow",     // wasm-bindgen non-deterministic
+		"Math.random",            // Non-deterministic
+		"Date.now",               // Non-deterministic
+		"performance.now",        // Non-deterministic
 		"crypto.getRandomValues", // Non-deterministic
 	},
 }

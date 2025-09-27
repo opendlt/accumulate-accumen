@@ -13,32 +13,32 @@ import (
 
 // PreparedModule contains a validated and compiled WASM module ready for execution
 type PreparedModule struct {
-	Module    wazero.CompiledModule
-	Metadata  *ModuleMetadata
-	Hash      [32]byte
-	ByteSize  uint64
+	Module   wazero.CompiledModule
+	Metadata *ModuleMetadata
+	Hash     [32]byte
+	ByteSize uint64
 }
 
 // ModuleMetadata contains information about a WASM module's capabilities
 type ModuleMetadata struct {
-	MemoryPages    uint32            `json:"memory_pages"`
-	MaxMemoryPages uint32            `json:"max_memory_pages"`
-	Exports        map[string]string `json:"exports"` // name -> type (func, global, etc.)
-	Imports        map[string]string `json:"imports"` // name -> type
-	HasFloatOps    bool              `json:"has_float_ops"`
-	IsValid        bool              `json:"is_valid"`
-	ValidationError string           `json:"validation_error,omitempty"`
+	MemoryPages     uint32            `json:"memory_pages"`
+	MaxMemoryPages  uint32            `json:"max_memory_pages"`
+	Exports         map[string]string `json:"exports"` // name -> type (func, global, etc.)
+	Imports         map[string]string `json:"imports"` // name -> type
+	HasFloatOps     bool              `json:"has_float_ops"`
+	IsValid         bool              `json:"is_valid"`
+	ValidationError string            `json:"validation_error,omitempty"`
 }
 
 // ModuleCache provides LRU caching for compiled WASM modules with determinism validation
 type ModuleCache struct {
-	mu       sync.RWMutex
-	cache    map[[32]byte]*cacheEntry
-	lruList  *lruNode
-	maxSize  int
-	runtime  wazero.Runtime
-	config   *RuntimeConfig
-	hitCount uint64
+	mu        sync.RWMutex
+	cache     map[[32]byte]*cacheEntry
+	lruList   *lruNode
+	maxSize   int
+	runtime   wazero.Runtime
+	config    *RuntimeConfig
+	hitCount  uint64
 	missCount uint64
 }
 
@@ -255,4 +255,3 @@ func (c *ModuleCache) Clear() {
 	c.hitCount = 0
 	c.missCount = 0
 }
-

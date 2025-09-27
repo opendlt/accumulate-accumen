@@ -121,8 +121,8 @@ func (m *Manager) CheckMultiplePages(ctx context.Context, pages []*url.URL, minC
 	for i, page := range pages {
 		if page == nil {
 			results[i] = PageStatus{
-				Page:    nil,
-				Error:   fmt.Errorf("page URL cannot be nil"),
+				Page:         nil,
+				Error:        fmt.Errorf("page URL cannot be nil"),
 				NeedsFunding: false,
 			}
 			continue
@@ -131,10 +131,10 @@ func (m *Manager) CheckMultiplePages(ctx context.Context, pages []*url.URL, minC
 		credits, err := m.querier.QueryCredits(ctx, page)
 		if err != nil {
 			results[i] = PageStatus{
-				Page:         page,
+				Page:           page,
 				CurrentCredits: 0,
-				Error:        fmt.Errorf("failed to query credits: %w", err),
-				NeedsFunding: true, // Assume it needs funding if we can't check
+				Error:          fmt.Errorf("failed to query credits: %w", err),
+				NeedsFunding:   true, // Assume it needs funding if we can't check
 			}
 			continue
 		}
@@ -193,15 +193,15 @@ func (m *Manager) GetStats() ManagerStats {
 	}
 
 	return ManagerStats{
-		CurrentGCR:     currentGCR,
-		ScheduleID:     func() string {
+		CurrentGCR: currentGCR,
+		ScheduleID: func() string {
 			if schedule != nil {
 				return schedule.ID
 			}
 			return "unknown"
 		}(),
-		HasQuerier:     m.querier != nil,
-		HasRoundRobin:  m.rr != nil,
+		HasQuerier:    m.querier != nil,
+		HasRoundRobin: m.rr != nil,
 	}
 }
 

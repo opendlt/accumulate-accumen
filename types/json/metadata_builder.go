@@ -11,23 +11,23 @@ import (
 
 // MetadataArgs contains arguments for building L1→L0 transaction metadata
 type MetadataArgs struct {
-	ChainID        string
-	BlockHeight    uint64
-	TxIndex        int
-	TxHash         []byte
-	AppHash        []byte
-	Time           time.Time
-	ContractAddr   string
-	Entry          string
-	Nonce          []byte
-	GasUsed        uint64
-	GasScheduleID  string
-	CreditsL0      uint64
-	CreditsL1      uint64
-	CreditsTotal   uint64
-	AcmeBurnt      string
-	L0Outputs      []map[string]any
-	Events         []EventData
+	ChainID       string
+	BlockHeight   uint64
+	TxIndex       int
+	TxHash        []byte
+	AppHash       []byte
+	Time          time.Time
+	ContractAddr  string
+	Entry         string
+	Nonce         []byte
+	GasUsed       uint64
+	GasScheduleID string
+	CreditsL0     uint64
+	CreditsL1     uint64
+	CreditsTotal  uint64
+	AcmeBurnt     string
+	L0Outputs     []map[string]any
+	Events        []EventData
 }
 
 // EventData represents an event key-value pair

@@ -31,8 +31,8 @@ type CreditConfig struct {
 
 // PriceOracle provides real-time pricing information
 type PriceOracle struct {
-	acmePrice    *big.Rat // ACME price in USD
-	lastUpdate   time.Time
+	acmePrice      *big.Rat // ACME price in USD
+	lastUpdate     time.Time
 	updateInterval time.Duration
 }
 

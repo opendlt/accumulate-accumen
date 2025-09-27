@@ -33,10 +33,10 @@ type VersionMeta struct {
 
 // ContractVersions contains all versions of a contract
 type ContractVersions struct {
-	Address        string        `json:"address"`
-	ActiveVersion  int           `json:"active_version"`
-	Versions       []VersionMeta `json:"versions"`
-	LatestVersion  int           `json:"latest_version"`
+	Address       string        `json:"address"`
+	ActiveVersion int           `json:"active_version"`
+	Versions      []VersionMeta `json:"versions"`
+	LatestVersion int           `json:"latest_version"`
 }
 
 // Store manages contract WASM modules and metadata
@@ -113,14 +113,14 @@ func (s *Store) SaveModule(addr string, wasm []byte) ([32]byte, error) {
 	}
 
 	metaKey := "contract:meta:" + addr
-	if err := s.kv.Put(metaKey, metaBytes); err != nil {
+	if err := s.kv.Put([]byte(metaKey), metaBytes); err != nil {
 		return [32]byte{}, fmt.Errorf("failed to store contract metadata: %w", err)
 	}
 
 	// Store WASM bytes if in-memory
 	if s.inMemory {
 		wasmKey := "contract:wasm:" + addr
-		if err := s.kv.Put(wasmKey, wasmBytes); err != nil {
+		if err := s.kv.Put([]byte(wasmKey), wasmBytes); err != nil {
 			return [32]byte{}, fmt.Errorf("failed to store WASM bytes: %w", err)
 		}
 	}
@@ -152,7 +152,7 @@ func (s *Store) SaveVersion(addr string, wasm []byte) (int, [32]byte, error) {
 	versionsKey := "contract:versions:" + addr
 	var versions ContractVersions
 
-	versionsBytes, err := s.kv.Get(versionsKey)
+	versionsBytes, err := s.kv.Get([]byte(versionsKey))
 	if err != nil {
 		if err == state.ErrKeyNotFound {
 			// First version of this contract
@@ -191,7 +191,7 @@ func (s *Store) SaveVersion(addr string, wasm []byte) (int, [32]byte, error) {
 	if s.inMemory {
 		// Store WASM bytes directly in KV store
 		wasmKey := fmt.Sprintf("contract:wasm:%s:v%d", addr, newVersion)
-		if err := s.kv.Put(wasmKey, wasm); err != nil {
+		if err := s.kv.Put([]byte(wasmKey), wasm); err != nil {
 			return 0, [32]byte{}, fmt.Errorf("failed to store WASM bytes: %w", err)
 		}
 	} else {
@@ -213,7 +213,7 @@ func (s *Store) SaveVersion(addr string, wasm []byte) (int, [32]byte, error) {
 		return 0, [32]byte{}, fmt.Errorf("failed to marshal contract versions: %w", err)
 	}
 
-	if err := s.kv.Put(versionsKey, updatedVersionsBytes); err != nil {
+	if err := s.kv.Put([]byte(versionsKey), updatedVersionsBytes); err != nil {
 		return 0, [32]byte{}, fmt.Errorf("failed to store contract versions: %w", err)
 	}
 
@@ -223,7 +223,7 @@ func (s *Store) SaveVersion(addr string, wasm []byte) (int, [32]byte, error) {
 // ActivateVersion sets a specific version as the active version for a contract
 func (s *Store) ActivateVersion(addr string, version int) error {
 	versionsKey := "contract:versions:" + addr
-	versionsBytes, err := s.kv.Get(versionsKey)
+	versionsBytes, err := s.kv.Get([]byte(versionsKey))
 	if err != nil {
 		if err == state.ErrKeyNotFound {
 			return fmt.Errorf("contract not found: %s", addr)
@@ -264,7 +264,7 @@ func (s *Store) ActivateVersion(addr string, version int) error {
 		return fmt.Errorf("failed to marshal contract versions: %w", err)
 	}
 
-	if err := s.kv.Put(versionsKey, updatedVersionsBytes); err != nil {
+	if err := s.kv.Put([]byte(versionsKey), updatedVersionsBytes); err != nil {
 		return fmt.Errorf("failed to store contract versions: %w", err)
 	}
 
@@ -274,7 +274,7 @@ func (s *Store) ActivateVersion(addr string, version int) error {
 // ActiveVersionMeta returns metadata for the currently active version of a contract
 func (s *Store) ActiveVersionMeta(addr string) (*VersionMeta, error) {
 	versionsKey := "contract:versions:" + addr
-	versionsBytes, err := s.kv.Get(versionsKey)
+	versionsBytes, err := s.kv.Get([]byte(versionsKey))
 	if err != nil {
 		if err == state.ErrKeyNotFound {
 			return nil, fmt.Errorf("contract not found: %s", addr)
@@ -304,7 +304,7 @@ func (s *Store) ActiveVersionMeta(addr string) (*VersionMeta, error) {
 // GetVersionModule retrieves a specific version of a WASM module
 func (s *Store) GetVersionModule(addr string, version int) ([]byte, [32]byte, error) {
 	versionsKey := "contract:versions:" + addr
-	versionsBytes, err := s.kv.Get(versionsKey)
+	versionsBytes, err := s.kv.Get([]byte(versionsKey))
 	if err != nil {
 		if err == state.ErrKeyNotFound {
 			return nil, [32]byte{}, fmt.Errorf("contract not found: %s", addr)
@@ -342,7 +342,7 @@ func (s *Store) GetVersionModule(addr string, version int) ([]byte, [32]byte, er
 	if s.inMemory {
 		// Load from KV store
 		wasmKey := fmt.Sprintf("contract:wasm:%s:v%d", addr, version)
-		wasmBytes, err = s.kv.Get(wasmKey)
+		wasmBytes, err = s.kv.Get([]byte(wasmKey))
 		if err != nil {
 			return nil, [32]byte{}, fmt.Errorf("failed to get WASM bytes from store: %w", err)
 		}
@@ -369,7 +369,7 @@ func (s *Store) GetVersionModule(addr string, version int) ([]byte, [32]byte, er
 // ListVersions returns all versions for a contract
 func (s *Store) ListVersions(addr string) (*ContractVersions, error) {
 	versionsKey := "contract:versions:" + addr
-	versionsBytes, err := s.kv.Get(versionsKey)
+	versionsBytes, err := s.kv.Get([]byte(versionsKey))
 	if err != nil {
 		if err == state.ErrKeyNotFound {
 			return nil, fmt.Errorf("contract not found: %s", addr)
@@ -396,7 +396,7 @@ func (s *Store) ListVersions(addr string) (*ContractVersions, error) {
 func (s *Store) GetModule(addr string) ([]byte, [32]byte, error) {
 	// Get metadata first
 	metaKey := "contract:meta:" + addr
-	metaBytes, err := s.kv.Get(metaKey)
+	metaBytes, err := s.kv.Get([]byte(metaKey))
 	if err != nil {
 		if err == state.ErrKeyNotFound {
 			return nil, [32]byte{}, fmt.Errorf("contract not found: %s", addr)
@@ -421,7 +421,7 @@ func (s *Store) GetModule(addr string) ([]byte, [32]byte, error) {
 	if s.inMemory {
 		// Load from KV store
 		wasmKey := "contract:wasm:" + addr
-		wasmBytes, err = s.kv.Get(wasmKey)
+		wasmBytes, err = s.kv.Get([]byte(wasmKey))
 		if err != nil {
 			return nil, [32]byte{}, fmt.Errorf("failed to get WASM bytes from store: %w", err)
 		}
@@ -447,7 +447,7 @@ func (s *Store) GetModule(addr string) ([]byte, [32]byte, error) {
 
 // ListModules returns metadata for all deployed contracts
 func (s *Store) ListModules() ([]ContractMeta, error) {
-	iter, err := s.kv.Iterator("contract:meta:")
+	iter, err := s.kv.Iterator([]byte("contract:meta:"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create iterator: %w", err)
 	}
@@ -455,10 +455,7 @@ func (s *Store) ListModules() ([]ContractMeta, error) {
 
 	var modules []ContractMeta
 	for iter.Valid() {
-		metaBytes, err := iter.Value()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get iterator value: %w", err)
-		}
+		metaBytes := iter.Value()
 
 		var meta ContractMeta
 		if err := json.Unmarshal(metaBytes, &meta); err != nil {
@@ -476,13 +473,17 @@ func (s *Store) ListModules() ([]ContractMeta, error) {
 		iter.Next()
 	}
 
+	if err := iter.Error(); err != nil {
+		return nil, fmt.Errorf("iterator error: %w", err)
+	}
+
 	return modules, nil
 }
 
 // HasModule checks if a contract is deployed
 func (s *Store) HasModule(addr string) (bool, error) {
 	metaKey := "contract:meta:" + addr
-	return s.kv.Has(metaKey)
+	return s.kv.Has([]byte(metaKey))
 }
 
 // DeleteModule removes a contract (for testing/admin purposes)
@@ -490,7 +491,7 @@ func (s *Store) DeleteModule(addr string) error {
 	// Get metadata to find file path if using Badger
 	if !s.inMemory {
 		metaKey := "contract:meta:" + addr
-		metaBytes, err := s.kv.Get(metaKey)
+		metaBytes, err := s.kv.Get([]byte(metaKey))
 		if err == nil {
 			var meta ContractMeta
 			if err := json.Unmarshal(metaBytes, &meta); err == nil && meta.BytesPath != "" {
@@ -502,14 +503,14 @@ func (s *Store) DeleteModule(addr string) error {
 
 	// Remove metadata
 	metaKey := "contract:meta:" + addr
-	if err := s.kv.Delete(metaKey); err != nil {
+	if err := s.kv.Delete([]byte(metaKey)); err != nil {
 		return fmt.Errorf("failed to delete contract metadata: %w", err)
 	}
 
 	// Remove WASM bytes if in-memory
 	if s.inMemory {
 		wasmKey := "contract:wasm:" + addr
-		if err := s.kv.Delete(wasmKey); err != nil {
+		if err := s.kv.Delete([]byte(wasmKey)); err != nil {
 			// Don't fail if WASM bytes key doesn't exist
 			return nil
 		}
@@ -521,7 +522,7 @@ func (s *Store) DeleteModule(addr string) error {
 // GetModuleHash returns just the hash of a deployed contract
 func (s *Store) GetModuleHash(addr string) ([32]byte, error) {
 	metaKey := "contract:meta:" + addr
-	metaBytes, err := s.kv.Get(metaKey)
+	metaBytes, err := s.kv.Get([]byte(metaKey))
 	if err != nil {
 		if err == state.ErrKeyNotFound {
 			return [32]byte{}, fmt.Errorf("contract not found: %s", addr)

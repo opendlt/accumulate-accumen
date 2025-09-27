@@ -9,29 +9,25 @@ import (
 	"time"
 
 	"github.com/opendlt/accumulate-accumen/engine/state"
-	"github.com/opendlt/accumulate-accumen/internal/accutil"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // Indexer scans DN metadata and reconstructs L1 state
 type Indexer struct {
-	mu     sync.RWMutex
-	config *Config
-	client *v3.Client
+	mu      sync.RWMutex
+	config  *Config
+	client  *api.Client
 	kvStore state.KVStore
-	logger *logz.Logger
+	logger  *logz.Logger
 
 	// State tracking
-	running        bool
-	checkpoint     *Checkpoint
-	stats          *Stats
-	stopChan       chan struct{}
-	scanTicker     *time.Ticker
+	running    bool
+	checkpoint *Checkpoint
+	stats      *Stats
+	stopChan   chan struct{}
+	scanTicker *time.Ticker
 
 	// Processing state
 	lastProcessedKey string
@@ -43,15 +39,15 @@ type Indexer struct {
 
 // Config defines configuration for the indexer
 type Config struct {
-	APIClient     *v3.Client
-	KVStore       state.KVStore
-	MetadataPath  string        // DN path for transaction metadata
-	AnchorsPath   string        // DN path for anchors
-	ScanInterval  time.Duration // How often to scan for new entries
-	BatchSize     int           // Number of entries to process per batch
-	StartFromKey  string        // Key to start scanning from (empty = beginning)
-	MaxRetries    int           // Maximum retry attempts for failed operations
-	RetryDelay    time.Duration // Delay between retries
+	APIClient    *api.Client
+	KVStore      state.KVStore
+	MetadataPath string        // DN path for transaction metadata
+	AnchorsPath  string        // DN path for anchors
+	ScanInterval time.Duration // How often to scan for new entries
+	BatchSize    int           // Number of entries to process per batch
+	StartFromKey string        // Key to start scanning from (empty = beginning)
+	MaxRetries   int           // Maximum retry attempts for failed operations
+	RetryDelay   time.Duration // Delay between retries
 }
 
 // Checkpoint represents the current indexing position
@@ -78,46 +74,46 @@ type Stats struct {
 
 // MetadataEntry represents a transaction metadata entry from DN
 type MetadataEntry struct {
-	ChainID       string                 `json:"chainId"`
-	BlockHeight   uint64                 `json:"blockHeight"`
-	TxIndex       int                    `json:"txIndex"`
-	TxHash        string                 `json:"txHash"`
-	Time          time.Time              `json:"time"`
-	ContractAddr  string                 `json:"contractAddr"`
-	Entry         string                 `json:"entry"`
-	GasUsed       uint64                 `json:"gasUsed"`
-	CreditsL0     uint64                 `json:"creditsL0"`
-	CreditsL1     uint64                 `json:"creditsL1"`
-	L0Outputs     []map[string]any       `json:"l0Outputs"`
-	Events        []map[string]any       `json:"events"`
+	ChainID      string           `json:"chainId"`
+	BlockHeight  uint64           `json:"blockHeight"`
+	TxIndex      int              `json:"txIndex"`
+	TxHash       string           `json:"txHash"`
+	Time         time.Time        `json:"time"`
+	ContractAddr string           `json:"contractAddr"`
+	Entry        string           `json:"entry"`
+	GasUsed      uint64           `json:"gasUsed"`
+	CreditsL0    uint64           `json:"creditsL0"`
+	CreditsL1    uint64           `json:"creditsL1"`
+	L0Outputs    []map[string]any `json:"l0Outputs"`
+	Events       []map[string]any `json:"events"`
 
 	// DN-specific fields for L1 discovery
-	DNTxID        []byte                 `json:"dnTxId,omitempty"` // The DN WriteData transaction ID
-	DNKey         string                 `json:"dnKey,omitempty"` // DN data entry key
-	L1Hash        string                 `json:"l1Hash,omitempty"` // L1 hash from crosslink memo
+	DNTxID []byte `json:"dnTxId,omitempty"` // The DN WriteData transaction ID
+	DNKey  string `json:"dnKey,omitempty"`  // DN data entry key
+	L1Hash string `json:"l1Hash,omitempty"` // L1 hash from crosslink memo
 }
 
 // L1Receipt represents a receipt for an L1 transaction with DN references
 type L1Receipt struct {
-	L1Hash       string    `json:"l1Hash"`
-	DNTxID       []byte    `json:"dnTxId"`
-	DNKey        string    `json:"dnKey"`
-	Contract     string    `json:"contract,omitempty"`
-	Entry        string    `json:"entry,omitempty"`
-	Metadata     *MetadataEntry `json:"metadata,omitempty"`
-	AnchorTxIDs  [][]byte  `json:"anchorTxIds,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
+	L1Hash      string         `json:"l1Hash"`
+	DNTxID      []byte         `json:"dnTxId"`
+	DNKey       string         `json:"dnKey"`
+	Contract    string         `json:"contract,omitempty"`
+	Entry       string         `json:"entry,omitempty"`
+	Metadata    *MetadataEntry `json:"metadata,omitempty"`
+	AnchorTxIDs [][]byte       `json:"anchorTxIds,omitempty"`
+	CreatedAt   time.Time      `json:"createdAt"`
 }
 
 // DNEntry represents a single data entry found during DN scanning
 type DNEntry struct {
-	Key           string    `json:"key"`
-	Data          []byte    `json:"data"`
-	TxID          []byte    `json:"txId"` // WriteData transaction ID
-	TxHeader      *api.TransactionQueryResponse `json:"txHeader,omitempty"`
-	L1Hash        string    `json:"l1Hash,omitempty"` // Parsed from memo/metadata
-	Contract      string    `json:"contract,omitempty"` // Parsed from metadata
-	EntryMethod   string    `json:"entryMethod,omitempty"` // Parsed from metadata
+	Key         string                        `json:"key"`
+	Data        []byte                        `json:"data"`
+	TxID        []byte                        `json:"txId"` // WriteData transaction ID
+	TxHeader    *interface{} /* TODO: fix api.TransactionQueryResponse for current API */ `json:"txHeader,omitempty"`
+	L1Hash      string                        `json:"l1Hash,omitempty"`      // Parsed from memo/metadata
+	Contract    string                        `json:"contract,omitempty"`    // Parsed from metadata
+	EntryMethod string                        `json:"entryMethod,omitempty"` // Parsed from metadata
 }
 
 // NewIndexer creates a new DN indexer
@@ -395,13 +391,13 @@ func (idx *Indexer) scanDNDataAccount(ctx context.Context, dnURL *url.URL, fromK
 			if err := json.Unmarshal(dnEntry.Data, &metadata); err != nil {
 				// If it's not JSON metadata, create a basic entry from DN info
 				metadata = &MetadataEntry{
-					TxHash:      l1Hash,
-					L1Hash:      l1Hash,
+					TxHash:       l1Hash,
+					L1Hash:       l1Hash,
 					ContractAddr: contract,
-					Entry:       entryMethod,
-					DNTxID:      dnEntry.TxID,
-					DNKey:       dnEntry.Key,
-					Time:        time.Now(), // Fallback
+					Entry:        entryMethod,
+					DNTxID:       dnEntry.TxID,
+					DNKey:        dnEntry.Key,
+					Time:         time.Now(), // Fallback
 				}
 			} else {
 				// Enhance parsed metadata with DN information
@@ -418,13 +414,13 @@ func (idx *Indexer) scanDNDataAccount(ctx context.Context, dnURL *url.URL, fromK
 		} else {
 			// Empty data, create basic entry
 			metadata = &MetadataEntry{
-				TxHash:      l1Hash,
-				L1Hash:      l1Hash,
+				TxHash:       l1Hash,
+				L1Hash:       l1Hash,
 				ContractAddr: contract,
-				Entry:       entryMethod,
-				DNTxID:      dnEntry.TxID,
-				DNKey:       dnEntry.Key,
-				Time:        time.Now(),
+				Entry:        entryMethod,
+				DNTxID:       dnEntry.TxID,
+				DNKey:        dnEntry.Key,
+				Time:         time.Now(),
 			}
 		}
 
@@ -452,7 +448,7 @@ func (idx *Indexer) scanDNDataAccount(ctx context.Context, dnURL *url.URL, fromK
 func (idx *Indexer) queryDataAccountEntries(ctx context.Context, dnURL *url.URL, fromKey string, limit int) ([]*DNEntry, error) {
 	// For now, return empty results since this requires actual DN integration
 	// In real implementation, this would:
-	// 1. Use v3.Client.QueryDirectory to list data entries under dnURL
+	// 1. Use api.Client.QueryDirectory to list data entries under dnURL
 	// 2. For each entry, query both the data and the WriteData transaction that created it
 	// 3. Parse the transaction header to extract memo and metadata
 
@@ -461,7 +457,7 @@ func (idx *Indexer) queryDataAccountEntries(ctx context.Context, dnURL *url.URL,
 }
 
 // parseL1InfoFromTxHeader extracts L1 hash and contract info from WriteData transaction header
-func (idx *Indexer) parseL1InfoFromTxHeader(txHeader *api.TransactionQueryResponse) (l1Hash, contract, entryMethod string) {
+func (idx *Indexer) parseL1InfoFromTxHeader(txHeader *interface{} /* TODO: fix api.TransactionQueryResponse for current API */) (l1Hash, contract, entryMethod string) {
 	if txHeader == nil || txHeader.Transaction == nil {
 		return "", "", ""
 	}
@@ -834,8 +830,6 @@ func (idx *Indexer) QueryContractState(contractAddr, stateKey string) ([]byte, e
 
 // ListContractKeys lists all state keys for a contract
 func (idx *Indexer) ListContractKeys(contractAddr string) ([]string, error) {
-	prefix := fmt.Sprintf("state:%s:", contractAddr)
-
 	// Simple iteration (in practice, might need more efficient prefix scanning)
 	var keys []string
 

@@ -16,13 +16,13 @@ type Config struct {
 	AnchorEvery    string   `yaml:"anchorEvery"`
 	AnchorEveryN   int      `yaml:"anchorEveryBlocks"`
 	GasScheduleID  string   `yaml:"gasScheduleID"`
-	L0 struct {
-		Source string   `yaml:"source"`          // "proxy" | "static"
-		Proxy  string   `yaml:"proxy"`           // http(s)://...
-		Static []string `yaml:"apiV3Endpoints"`  // static endpoint list
-		WSPath string   `yaml:"wsPath"`          // WebSocket path, default "/ws"
+	L0             struct {
+		Source string   `yaml:"source"`         // "proxy" | "static"
+		Proxy  string   `yaml:"proxy"`          // http(s)://...
+		Static []string `yaml:"apiV3Endpoints"` // static endpoint list
+		WSPath string   `yaml:"wsPath"`         // WebSocket path, default "/ws"
 	} `yaml:"l0"`
-	DNPaths        struct {
+	DNPaths struct {
 		Anchors string `yaml:"anchorsBase"`
 		TxMeta  string `yaml:"txBase"`
 	} `yaml:"dnPaths"`
@@ -35,9 +35,9 @@ type Config struct {
 		RefreshInterval string `yaml:"refreshInterval"` // How often to refresh schedule (e.g., "60s")
 	} `yaml:"pricing"`
 	Submitter struct {
-		BatchSize   int    `yaml:"batchSize"`   // Number of items to process per batch
-		BackoffMin  string `yaml:"backoffMin"`  // Minimum backoff duration (e.g., "1s")
-		BackoffMax  string `yaml:"backoffMax"`  // Maximum backoff duration (e.g., "5m")
+		BatchSize  int    `yaml:"batchSize"`  // Number of items to process per batch
+		BackoffMin string `yaml:"backoffMin"` // Minimum backoff duration (e.g., "1s")
+		BackoffMax string `yaml:"backoffMax"` // Maximum backoff duration (e.g., "5m")
 	} `yaml:"submitter"`
 	Confirm struct {
 		WaitForExecution bool   `yaml:"waitForExecution"` // Wait for transaction execution confirmation
@@ -90,7 +90,7 @@ type Config struct {
 		Name string `yaml:"name"` // "mainnet"|"testnet"|"devnet"|"local"
 		Path string `yaml:"path"` // optional explicit file path
 	} `yaml:"profiles"`
-	SequencerKey string `yaml:"sequencerKey"`       // DEPRECATED: hex or base64, use Signer instead
+	SequencerKey string `yaml:"sequencerKey"` // DEPRECATED: hex or base64, use Signer instead
 	networkName  string // internal field to track the effective network
 }
 

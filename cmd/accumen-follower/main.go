@@ -125,15 +125,15 @@ func runFollower(ctx context.Context, cfg *config.Config, apiClient *v3.Client) 
 
 	// Create indexer for DN metadata scanning
 	indexerConfig := &indexer.Config{
-		APIClient:     apiClient,
-		KVStore:       kvStore,
-		MetadataPath:  cfg.DNPaths.TxMeta,
-		AnchorsPath:   cfg.DNPaths.Anchors,
-		ScanInterval:  30 * time.Second,
-		BatchSize:     100,
-		StartFromKey:  "", // Start from beginning
-		MaxRetries:    3,
-		RetryDelay:    time.Second,
+		APIClient:    apiClient,
+		KVStore:      kvStore,
+		MetadataPath: cfg.DNPaths.TxMeta,
+		AnchorsPath:  cfg.DNPaths.Anchors,
+		ScanInterval: 30 * time.Second,
+		BatchSize:    100,
+		StartFromKey: "", // Start from beginning
+		MaxRetries:   3,
+		RetryDelay:   time.Second,
 	}
 
 	idx, err := indexer.NewIndexer(indexerConfig)
@@ -221,10 +221,10 @@ func runFollower(ctx context.Context, cfg *config.Config, apiClient *v3.Client) 
 
 // FollowerStats contains statistics about the follower
 type FollowerStats struct {
-	Running       bool                `json:"running"`
-	IndexerStats  *indexer.Stats      `json:"indexer_stats"`
-	RPCStats      *rpc.ServerStats    `json:"rpc_stats,omitempty"`
-	Uptime        time.Duration       `json:"uptime"`
+	Running      bool             `json:"running"`
+	IndexerStats *indexer.Stats   `json:"indexer_stats"`
+	RPCStats     *rpc.ServerStats `json:"rpc_stats,omitempty"`
+	Uptime       time.Duration    `json:"uptime"`
 }
 
 // GetFollowerStats returns comprehensive follower statistics
