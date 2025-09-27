@@ -14,7 +14,7 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
-	"github.com/opendlt/accumulate-accumen/bridge/outputs/limits"
+	"github.com/opendlt/accumulate-accumen/bridge/outputs"
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/internal/accutil"
 	"github.com/opendlt/accumulate-accumen/registry/authority"

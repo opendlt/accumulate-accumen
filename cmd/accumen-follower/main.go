@@ -18,7 +18,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/metrics"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
 var (

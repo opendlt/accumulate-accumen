@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 

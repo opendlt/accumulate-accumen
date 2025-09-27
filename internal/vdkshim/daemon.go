@@ -11,8 +11,8 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/vdk/logger"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/vdk/node"
+	"gitlab.com/accumulatenetwork/accumulate/vdk/logger"
+	"gitlab.com/accumulatenetwork/accumulate/vdk/node"
 )
 
 // VDKDaemon wraps an Accumen sequencer in a VDK daemon

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"

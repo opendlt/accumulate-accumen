@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
 // Schedule defines gas costs and pricing for operations

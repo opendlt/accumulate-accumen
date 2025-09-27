@@ -26,7 +26,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/sequencer"
 	"github.com/opendlt/accumulate-accumen/types/l1"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/client/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
 var (
