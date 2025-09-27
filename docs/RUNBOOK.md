@@ -2774,3 +2774,595 @@ curl http://localhost:8667/metrics | grep accumen_ | head -10
 ```
 
 The Prometheus integration provides production-grade observability for Accumen deployments, enabling proactive monitoring, alerting, and performance optimization.
+
+## Benchmark & Stress Test Accumen
+
+Accumen includes comprehensive benchmarking and stress testing tools to validate throughput, latency, and determinism. These tools help ensure performance characteristics meet production requirements and validate system behavior under load.
+
+### Performance Testing Overview
+
+Accumen provides three levels of performance validation:
+
+1. **Stress Testing**: End-to-end load testing with `accustress`
+2. **Unit Benchmarks**: Component-level performance with Go benchmarks
+3. **Determinism Testing**: WASM execution consistency validation
+
+### Stress Testing with accustress
+
+The `accustress` tool provides comprehensive load testing capabilities for Accumen deployments.
+
+#### Installation and Build
+
+```bash
+# Build the stress testing tool
+go build -o bin/accustress ./cmd/accustress
+
+# Or use make target
+make build-accustress
+```
+
+#### Basic Usage
+
+```bash
+# Basic stress test with default parameters
+./bin/accustress --rpc=http://localhost:8666
+
+# Comprehensive stress test
+./bin/accustress \
+  --rpc=http://localhost:8666 \
+  --contracts=20 \
+  --tps=500 \
+  --duration=60s \
+  --payload-bytes=1024 \
+  --workers=16 \
+  --verbose
+```
+
+#### Command Line Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--rpc` | `http://localhost:8666` | RPC endpoint URL |
+| `--contracts` | `10` | Number of contracts to deploy and test |
+| `--tps` | `100` | Target transactions per second |
+| `--duration` | `30s` | Test duration |
+| `--payload-bytes` | `256` | Size of random payload per transaction |
+| `--workers` | `10` | Number of worker goroutines |
+| `--verbose` | `false` | Enable verbose logging and JSON output |
+
+#### Example Test Scenarios
+
+##### Low Load Baseline Test
+
+```bash
+./bin/accustress \
+  --contracts=5 \
+  --tps=50 \
+  --duration=30s \
+  --payload-bytes=128
+```
+
+**Expected output:**
+```
+🚀 Starting Accumen Stress Test
+📦 Deploying 5 test contracts...
+✅ Deployed 5 contracts successfully
+⚡ Starting stress test for 30s...
+📊 Stress Test Results
+==================================================
+Test Configuration:
+  Duration: 30s
+  Contracts: 5
+  Payload Size: 128 bytes
+
+Throughput:
+  Total Transactions: 1487
+  Successful: 1485
+  Failed: 2
+  Actual TPS: 49.5
+  Error Rate: 0.13%
+
+Latency (successful transactions):
+  Mean: 15.2ms
+  P50: 12.1ms
+  P95: 28.7ms
+  P99: 45.3ms
+
+Performance Assessment:
+  ✅ Error rate is acceptable (<1%)
+  ✅ P95 latency is good (<100ms)
+  ✅ Throughput achieved target (49.5 TPS >= 45.0 TPS)
+```
+
+##### High Load Stress Test
+
+```bash
+./bin/accustress \
+  --contracts=50 \
+  --tps=1000 \
+  --duration=120s \
+  --payload-bytes=2048 \
+  --workers=32
+```
+
+##### Sustained Load Test
+
+```bash
+./bin/accustress \
+  --contracts=100 \
+  --tps=200 \
+  --duration=600s \
+  --payload-bytes=512 \
+  --workers=20
+```
+
+#### Performance Metrics
+
+The stress tester reports comprehensive metrics:
+
+**Throughput Metrics:**
+- Total transactions executed
+- Success/failure counts and rates
+- Actual TPS achieved vs. target
+
+**Latency Metrics:**
+- Mean, P50, P95, P99 latencies
+- Latency distribution for successful transactions
+- Response time consistency
+
+**Error Analysis:**
+- Error rates by type
+- Failure categorization
+- System stability under load
+
+#### JSON Output for Automation
+
+Use `--verbose` flag to get machine-readable JSON output:
+
+```bash
+./bin/accustress --verbose --tps=100 --duration=60s
+```
+
+**JSON structure:**
+```json
+{
+  "TotalTxs": 5987,
+  "SuccessfulTxs": 5981,
+  "FailedTxs": 6,
+  "ErrorRate": 0.10,
+  "LatencyP50": "12.1ms",
+  "LatencyP95": "28.7ms",
+  "LatencyP99": "45.3ms",
+  "MeanLatency": "15.2ms",
+  "ActualTPS": 99.78,
+  "TestDuration": "60s",
+  "ContractsUsed": 10,
+  "PayloadSize": 256,
+  "ErrorsByType": {
+    "connection_timeout": 3,
+    "execution_failed": 3
+  }
+}
+```
+
+### Unit Benchmarks
+
+Accumen includes comprehensive Go benchmarks for component-level performance testing.
+
+#### Running Benchmarks
+
+```bash
+# Run all benchmarks
+go test -bench=. ./sequencer -benchmem
+
+# Run specific benchmark categories
+go test -bench=BenchmarkExecuteTx ./sequencer -benchmem
+go test -bench=BenchmarkMempool ./sequencer -benchmem
+go test -bench=BenchmarkState ./sequencer -benchmem
+
+# Run benchmarks with custom parameters
+go test -bench=BenchmarkThroughput ./sequencer -benchtime=30s -benchmem
+```
+
+#### Available Benchmarks
+
+##### Transaction Execution Benchmarks
+
+```bash
+# Test transaction execution performance
+go test -bench=BenchmarkExecuteTx ./sequencer -benchmem
+```
+
+**Sample output:**
+```
+BenchmarkExecuteTx/SmallTx-8           5000   240315 ns/op    1024 B/op    16 allocs/op
+BenchmarkExecuteTx/MediumTx-8          3000   385421 ns/op    2048 B/op    24 allocs/op
+BenchmarkExecuteTx/LargeTx-8           1000  1205338 ns/op    8192 B/op    48 allocs/op
+BenchmarkExecuteTx/XLargeTx-8           500  2891047 ns/op   32768 B/op    96 allocs/op
+```
+
+##### Mempool Performance Benchmarks
+
+```bash
+# Test mempool ingestion performance
+go test -bench=BenchmarkMempoolIngest ./sequencer -benchmem
+```
+
+##### Block Production Benchmarks
+
+```bash
+# Test block production performance
+go test -bench=BenchmarkBlockProduction ./sequencer -benchmem
+```
+
+##### State Operations Benchmarks
+
+```bash
+# Test KV store performance
+go test -bench=BenchmarkStateOperations ./sequencer -benchmem
+```
+
+**Comparing storage backends:**
+```
+BenchmarkStateOperations/Memory_SetKey-8      1000000   1203 ns/op    128 B/op    2 allocs/op
+BenchmarkStateOperations/Badger_SetKey-8       500000   2847 ns/op    256 B/op    4 allocs/op
+BenchmarkStateOperations/Memory_GetKey-8      2000000    634 ns/op     64 B/op    1 allocs/op
+BenchmarkStateOperations/Badger_GetKey-8      1000000   1521 ns/op    128 B/op    2 allocs/op
+```
+
+##### Concurrency Benchmarks
+
+```bash
+# Test concurrent execution performance
+go test -bench=BenchmarkConcurrentExecution ./sequencer -benchmem
+```
+
+##### Throughput Benchmarks
+
+```bash
+# Test sustained throughput scenarios
+go test -bench=BenchmarkThroughput ./sequencer -benchtime=10s
+```
+
+#### Benchmark Analysis
+
+**Interpreting Results:**
+
+1. **ns/op**: Nanoseconds per operation (lower is better)
+2. **B/op**: Bytes allocated per operation (lower is better)
+3. **allocs/op**: Number of allocations per operation (lower is better)
+
+**Performance Targets:**
+
+| Operation | Target | Good | Needs Improvement |
+|-----------|--------|------|-------------------|
+| Transaction execution | <500ms | <100ms | >1s |
+| Mempool ingestion | <10ms | <1ms | >50ms |
+| State read | <1ms | <100μs | >10ms |
+| State write | <5ms | <1ms | >20ms |
+| Block production | <2s | <500ms | >5s |
+
+### Determinism Testing
+
+WASM execution determinism is critical for blockchain consensus. The fuzz tests validate that identical inputs produce identical outputs.
+
+#### Running Determinism Tests
+
+```bash
+# Run determinism tests
+go test ./engine/runtime -run TestDeterminism -v
+
+# Run with extended iterations
+go test ./engine/runtime -run TestDeterminism -v -args -iterations=1000
+
+# Run fuzz tests (requires longer execution time)
+go test ./engine/runtime -run TestFuzzDeterminism -v
+
+# Run concurrent determinism tests
+go test ./engine/runtime -run TestConcurrentDeterminism -v
+```
+
+#### Test Categories
+
+##### Basic Determinism Tests
+
+Validates that the same WASM module with identical inputs produces identical results across multiple executions:
+
+```bash
+go test ./engine/runtime -run TestDeterminism/CounterIncrement -v
+```
+
+**Expected output:**
+```
+=== RUN   TestDeterminism/CounterIncrement
+    fuzz_test.go:45: Testing determinism: Simple counter increment should be deterministic
+    fuzz_test.go:46: Running 100 iterations with entry point: increment
+    fuzz_test.go:55: Completed 10/100 iterations
+    fuzz_test.go:55: Completed 20/100 iterations
+    ...
+    fuzz_test.go:85: ✅ Determinism verified across 100 iterations
+    fuzz_test.go:86: 📊 Execution time stats:
+    fuzz_test.go:87:   Average: 2.1ms
+    fuzz_test.go:88:   Min: 1.8ms
+    fuzz_test.go:89:   Max: 3.2ms
+    fuzz_test.go:90:   Range: 1.4ms
+    fuzz_test.go:91: 🔍 Result fingerprint:
+    fuzz_test.go:92:   State root: a1b2c3d4
+    fuzz_test.go:93:   Gas used: 1500
+    fuzz_test.go:94:   Events: 2
+    fuzz_test.go:95:   Return size: 32 bytes
+--- PASS: TestDeterminism/CounterIncrement (0.21s)
+```
+
+##### Fuzz Determinism Tests
+
+Tests determinism with randomized inputs:
+
+```bash
+go test ./engine/runtime -run TestFuzzDeterminism -v -timeout=30m
+```
+
+##### Concurrent Determinism Tests
+
+Validates determinism under concurrent execution:
+
+```bash
+go test ./engine/runtime -run TestConcurrentDeterminism -v
+```
+
+##### Execution Reproducibility Tests
+
+Ensures execution results can be reproduced given identical conditions:
+
+```bash
+go test ./engine/runtime -run TestExecutionReproducibility -v
+```
+
+#### Determinism Validation Checklist
+
+The tests verify:
+
+- ✅ **State root consistency**: Identical state changes across runs
+- ✅ **Gas usage consistency**: Deterministic gas consumption
+- ✅ **Event emission consistency**: Same events in same order
+- ✅ **Return data consistency**: Identical function return values
+- ✅ **Error handling consistency**: Same error conditions produce same results
+
+### Performance Profiling
+
+#### CPU Profiling
+
+```bash
+# Profile CPU usage during benchmarks
+go test -bench=BenchmarkExecuteTx ./sequencer -cpuprofile=cpu.prof
+
+# Analyze CPU profile
+go tool pprof cpu.prof
+```
+
+#### Memory Profiling
+
+```bash
+# Profile memory usage
+go test -bench=BenchmarkMemoryUsage ./sequencer -memprofile=mem.prof
+
+# Analyze memory profile
+go tool pprof mem.prof
+```
+
+#### Continuous Profiling
+
+```bash
+# Enable profiling in running sequencer
+curl http://localhost:8667/debug/pprof/profile?seconds=30 > cpu.prof
+
+# Memory heap snapshot
+curl http://localhost:8667/debug/pprof/heap > heap.prof
+
+# Goroutine analysis
+curl http://localhost:8667/debug/pprof/goroutine > goroutine.prof
+```
+
+### Performance Regression Testing
+
+#### Automated Performance Testing
+
+```bash
+#!/bin/bash
+# performance-test.sh - Automated performance regression testing
+
+# Run baseline stress test
+echo "Running baseline stress test..."
+./bin/accustress \
+  --contracts=10 \
+  --tps=100 \
+  --duration=60s \
+  --verbose > baseline-results.json
+
+# Extract key metrics
+baseline_tps=$(jq '.ActualTPS' baseline-results.json)
+baseline_p95=$(jq '.LatencyP95' baseline-results.json)
+baseline_error_rate=$(jq '.ErrorRate' baseline-results.json)
+
+echo "Baseline: TPS=$baseline_tps, P95=$baseline_p95, Error Rate=$baseline_error_rate%"
+
+# Run benchmark suite
+echo "Running benchmark suite..."
+go test -bench=. ./sequencer -benchmem > benchmark-results.txt
+
+# Check for regressions
+if (( $(echo "$baseline_tps < 90" | bc -l) )); then
+    echo "❌ Performance regression: TPS below threshold"
+    exit 1
+fi
+
+if (( $(echo "$baseline_error_rate > 1.0" | bc -l) )); then
+    echo "❌ Reliability regression: Error rate too high"
+    exit 1
+fi
+
+echo "✅ Performance tests passed"
+```
+
+#### Performance Monitoring Integration
+
+```yaml
+# .github/workflows/performance.yml
+name: Performance Tests
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM
+
+jobs:
+  performance:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: 1.21
+
+    - name: Build tools
+      run: |
+        make build
+        make build-accustress
+
+    - name: Start Accumen
+      run: |
+        ./bin/accumen --config=config/ci.yaml &
+        sleep 5
+
+    - name: Run stress tests
+      run: |
+        ./bin/accustress \
+          --contracts=5 \
+          --tps=50 \
+          --duration=30s \
+          --verbose > stress-results.json
+
+    - name: Run benchmarks
+      run: |
+        go test -bench=. ./sequencer -benchmem > bench-results.txt
+
+    - name: Validate performance
+      run: |
+        # Add performance validation logic
+        python scripts/validate-performance.py
+```
+
+### Production Performance Monitoring
+
+#### Performance Dashboards
+
+Create Grafana dashboards for ongoing performance monitoring:
+
+**Key Performance Indicators:**
+- Transaction throughput (TPS)
+- Transaction latency (P95, P99)
+- Block production time
+- Mempool size and ingestion rate
+- State operation latency
+- Error rates and types
+
+#### Alerting Rules
+
+```yaml
+# prometheus-alerts.yml
+groups:
+  - name: accumen-performance
+    rules:
+      - alert: LowThroughput
+        expr: rate(accumen_transactions_executed_total[5m]) < 50
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Accumen throughput below threshold"
+          description: "TPS: {{ $value }}"
+
+      - alert: HighLatency
+        expr: histogram_quantile(0.95, rate(accumen_transaction_duration_seconds_bucket[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High transaction latency"
+          description: "P95 latency: {{ $value }}s"
+```
+
+#### Performance Baseline Tracking
+
+```bash
+# Weekly performance baseline update
+#!/bin/bash
+# update-baseline.sh
+
+DATE=$(date +%Y%m%d)
+BASELINE_DIR="performance-baselines"
+
+# Run comprehensive performance test
+./bin/accustress \
+  --contracts=20 \
+  --tps=200 \
+  --duration=300s \
+  --verbose > $BASELINE_DIR/stress-$DATE.json
+
+# Run benchmark suite
+go test -bench=. ./sequencer -benchmem > $BASELINE_DIR/bench-$DATE.txt
+
+# Generate performance report
+python scripts/generate-performance-report.py \
+  --baseline-dir=$BASELINE_DIR \
+  --output=reports/performance-$DATE.html
+
+echo "Performance baseline updated for $DATE"
+```
+
+### Troubleshooting Performance Issues
+
+#### Common Performance Problems
+
+1. **High Latency**
+   - Check mempool size and ingestion rate
+   - Verify storage backend performance
+   - Analyze WASM execution time
+   - Review network connectivity
+
+2. **Low Throughput**
+   - Increase worker concurrency
+   - Optimize block production timing
+   - Check resource utilization (CPU, memory, disk)
+   - Verify sequencer configuration
+
+3. **Memory Leaks**
+   - Monitor memory usage over time
+   - Run memory profiling
+   - Check for goroutine leaks
+   - Verify proper resource cleanup
+
+4. **Determinism Failures**
+   - Check for non-deterministic dependencies
+   - Verify WASM module compilation
+   - Review floating-point operations
+   - Validate random number generation
+
+#### Performance Investigation Tools
+
+```bash
+# Real-time performance monitoring
+watch -n 1 'curl -s http://localhost:8667/debug/vars | jq .mempool'
+
+# Transaction latency histogram
+curl -s http://localhost:8667/metrics | grep accumen_transaction_duration
+
+# Resource utilization
+top -p $(pgrep accumen)
+iostat -x 1
+```
+
+The benchmarking and stress testing tools provide comprehensive validation of Accumen's performance characteristics, ensuring production readiness and helping identify optimization opportunities.
