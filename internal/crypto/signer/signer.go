@@ -18,7 +18,7 @@ import (
 // Signer interface for signing envelopes
 type Signer interface {
 	// SignEnvelope signs an envelope builder
-	SignEnvelope(*build.EnvelopeBuilder) error
+	SignEnvelope(*build.SignatureBuilder) error
 	// GetPublicKey returns the public key used for signing
 	GetPublicKey() (ed25519.PublicKey, error)
 	// GetKeyAlias returns the key alias (if applicable)
@@ -53,15 +53,14 @@ func NewFileKeySigner(keyPath, keyAlias string) (*FileKeySigner, error) {
 }
 
 // SignEnvelope signs the envelope with the file-based key
-func (f *FileKeySigner) SignEnvelope(envelope *build.EnvelopeBuilder) error {
+func (f *FileKeySigner) SignEnvelope(builder *build.SignatureBuilder) error {
 	if f.privateKey == nil {
 		return fmt.Errorf("no private key available")
 	}
 
-	// Sign the envelope with the private key
-	if err := envelope.SignWith(f.privateKey); err != nil {
-		return fmt.Errorf("failed to sign envelope: %w", err)
-	}
+	// Use the ED25519PrivateKey type from build package
+	signer := build.ED25519PrivateKey(f.privateKey)
+	*builder = builder.Signer(signer)
 
 	return nil
 }
@@ -104,15 +103,14 @@ func NewEnvKeySigner(envVar, keyAlias string) (*EnvKeySigner, error) {
 }
 
 // SignEnvelope signs the envelope with the environment-based key
-func (e *EnvKeySigner) SignEnvelope(envelope *build.EnvelopeBuilder) error {
+func (e *EnvKeySigner) SignEnvelope(builder *build.SignatureBuilder) error {
 	if e.privateKey == nil {
 		return fmt.Errorf("no private key available")
 	}
 
-	// Sign the envelope with the private key
-	if err := envelope.SignWith(e.privateKey); err != nil {
-		return fmt.Errorf("failed to sign envelope: %w", err)
-	}
+	// Use the ED25519PrivateKey type from build package
+	signer := build.ED25519PrivateKey(e.privateKey)
+	*builder = builder.Signer(signer)
 
 	return nil
 }
@@ -167,15 +165,14 @@ func NewDevKeySignerFromKey(keyData, keyAlias string) (*DevKeySigner, error) {
 }
 
 // SignEnvelope signs the envelope with the development key
-func (d *DevKeySigner) SignEnvelope(envelope *build.EnvelopeBuilder) error {
+func (d *DevKeySigner) SignEnvelope(builder *build.SignatureBuilder) error {
 	if d.privateKey == nil {
 		return fmt.Errorf("no private key available")
 	}
 
-	// Sign the envelope with the private key
-	if err := envelope.SignWith(d.privateKey); err != nil {
-		return fmt.Errorf("failed to sign envelope: %w", err)
-	}
+	// Use the ED25519PrivateKey type from build package
+	signer := build.ED25519PrivateKey(d.privateKey)
+	*builder = builder.Signer(signer)
 
 	return nil
 }
@@ -208,7 +205,7 @@ func NewKeystoreSigner(ks *keystore.Keystore, keyAlias string) *KeystoreSigner {
 }
 
 // SignEnvelope signs an envelope using the keystore key
-func (ks *KeystoreSigner) SignEnvelope(envelope *build.EnvelopeBuilder) error {
+func (ks *KeystoreSigner) SignEnvelope(builder *build.SignatureBuilder) error {
 	if ks.keystore == nil {
 		return fmt.Errorf("keystore is nil")
 	}
@@ -223,10 +220,9 @@ func (ks *KeystoreSigner) SignEnvelope(envelope *build.EnvelopeBuilder) error {
 		return fmt.Errorf("failed to get private key for alias '%s': %w", ks.keyAlias, err)
 	}
 
-	// Sign the envelope
-	if err := envelope.SignWith(privateKey); err != nil {
-		return fmt.Errorf("failed to sign envelope: %w", err)
-	}
+	// Use the ED25519PrivateKey type from build package
+	signer := build.ED25519PrivateKey(privateKey)
+	*builder = builder.Signer(signer)
 
 	return nil
 }

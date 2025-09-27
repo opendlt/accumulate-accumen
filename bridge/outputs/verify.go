@@ -14,7 +14,7 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
-	"github.com/opendlt/accumulate-accumen/bridge/outputs"
+
 	"github.com/opendlt/accumulate-accumen/engine/runtime"
 	"github.com/opendlt/accumulate-accumen/internal/accutil"
 	"github.com/opendlt/accumulate-accumen/registry/authority"
@@ -77,15 +77,15 @@ type Signature struct {
 
 // VerificationResult represents the result of output verification
 type VerificationResult struct {
-	OutputID          string                   `json:"output_id"`
-	Valid             bool                     `json:"valid"`
-	Errors            []string                 `json:"errors,omitempty"`
-	Warnings          []string                 `json:"warnings,omitempty"`
-	ChecksumVerified  bool                     `json:"checksum_verified"`
-	SignatureVerified bool                     `json:"signature_verified"`
-	DependenciesValid bool                     `json:"dependencies_valid"`
-	VerificationTime  time.Duration            `json:"verification_time"`
-	Metadata          map[string]interface{}   `json:"metadata,omitempty"`
+	OutputID          string                 `json:"output_id"`
+	Valid             bool                   `json:"valid"`
+	Errors            []string               `json:"errors,omitempty"`
+	Warnings          []string               `json:"warnings,omitempty"`
+	ChecksumVerified  bool                   `json:"checksum_verified"`
+	SignatureVerified bool                   `json:"signature_verified"`
+	DependenciesValid bool                   `json:"dependencies_valid"`
+	VerificationTime  time.Duration          `json:"verification_time"`
+	Metadata          map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // NewVerifier creates a new output verifier

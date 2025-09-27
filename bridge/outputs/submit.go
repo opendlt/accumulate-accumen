@@ -22,10 +22,10 @@ type OutputSubmitter struct {
 	config        *SubmitterConfig
 
 	// Submission control
-	mu        sync.RWMutex
-	running   bool
-	stopChan  chan struct{}
-	workers   int
+	mu       sync.RWMutex
+	running  bool
+	stopChan chan struct{}
+	workers  int
 }
 
 // SubmitterConfig defines configuration for the output submitter
@@ -49,23 +49,23 @@ func DefaultSubmitterConfig() *SubmitterConfig {
 	return &SubmitterConfig{
 		WorkerCount:          4,
 		SubmissionInterval:   time.Second,
-		MaxBatchSize:        100,
-		SubmissionTimeout:   30 * time.Second,
+		MaxBatchSize:         100,
+		SubmissionTimeout:    30 * time.Second,
 		ValidateBeforeSubmit: true,
-		RetryDelay:          5 * time.Second,
+		RetryDelay:           5 * time.Second,
 	}
 }
 
 // SubmissionResult represents the result of a submission attempt
 type SubmissionResult struct {
-	OutputID    string                `json:"output_id"`
-	Success     bool                  `json:"success"`
-	TxHash      []byte               `json:"tx_hash,omitempty"`
-	Response    *api.SubmitResponse  `json:"response,omitempty"`
-	Error       error                `json:"error,omitempty"`
-	Cost        uint64               `json:"cost"`
-	SubmittedAt time.Time            `json:"submitted_at"`
-	Duration    time.Duration        `json:"duration"`
+	OutputID    string              `json:"output_id"`
+	Success     bool                `json:"success"`
+	TxHash      []byte              `json:"tx_hash,omitempty"`
+	Response    *api.SubmitResponse `json:"response,omitempty"`
+	Error       error               `json:"error,omitempty"`
+	Cost        uint64              `json:"cost"`
+	SubmittedAt time.Time           `json:"submitted_at"`
+	Duration    time.Duration       `json:"duration"`
 }
 
 // NewOutputSubmitter creates a new output submitter
@@ -315,15 +315,15 @@ func (os *OutputSubmitter) GetSubmissionStats() *SubmissionStats {
 	defer os.mu.RUnlock()
 
 	return &SubmissionStats{
-		Running:     os.running,
-		WorkerCount: os.workers,
+		Running:      os.running,
+		WorkerCount:  os.workers,
 		StagingStats: os.stager.GetStagingStats(),
 	}
 }
 
 // SubmissionStats contains statistics about the submission process
 type SubmissionStats struct {
-	Running      bool           `json:"running"`
+	Running      bool          `json:"running"`
 	WorkerCount  int           `json:"worker_count"`
 	StagingStats *StagingStats `json:"staging_stats"`
 }

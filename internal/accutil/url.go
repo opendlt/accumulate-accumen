@@ -198,9 +198,8 @@ func GetADI(u *url.URL) (*url.URL, error) {
 		return nil, fmt.Errorf("URL must have an authority: %s", u)
 	}
 
-	// Create a new URL with just the scheme and authority
+	// Create a new URL with just the authority (scheme is always acc://)
 	adiURL := &url.URL{
-		Scheme:    u.Scheme,
 		Authority: u.Authority,
 	}
 
@@ -276,13 +275,10 @@ func JoinPath(base *url.URL, segments ...string) *url.URL {
 		return nil
 	}
 
-	// Create a copy of the base URL
+	// Create a copy of the base URL (scheme is always acc://)
 	result := &url.URL{
-		Scheme:    base.Scheme,
 		Authority: base.Authority,
 		UserInfo:  base.UserInfo,
-		Host:      base.Host,
-		Port:      base.Port,
 		Path:      base.Path,
 		Query:     base.Query,
 		Fragment:  base.Fragment,

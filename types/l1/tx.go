@@ -62,7 +62,8 @@ func (tx *Tx) MarshalCBOR() ([]byte, error) {
 
 // UnmarshalCBOR deserializes the transaction from CBOR format
 func (tx *Tx) UnmarshalCBOR(data []byte) error {
-	dm, err := cbor.CoreDetDecOptions().DecMode()
+	// Use default DecOptions for deterministic decoding
+	dm, err := cbor.DecOptions{}.DecMode()
 	if err != nil {
 		return fmt.Errorf("failed to create CBOR decoder: %w", err)
 	}

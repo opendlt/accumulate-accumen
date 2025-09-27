@@ -371,44 +371,44 @@ func (s *Scope) Cleanup() error {
 
 // AuthorityScope defines what L0 operations a contract is authorized to perform
 type AuthorityScope struct {
-	Version   int                 `json:"version"`
-	Contract  string              `json:"contract"`  // Contract URL
-	Paused    bool                `json:"paused"`    // If true, no operations allowed
-	Allowed   AllowedOperations   `json:"allowed"`   // Allowed operation types and targets
-	CreatedAt time.Time           `json:"created_at"`
-	UpdatedAt time.Time           `json:"updated_at"`
-	ExpiresAt *time.Time          `json:"expires_at,omitempty"`
+	Version   int               `json:"version"`
+	Contract  string            `json:"contract"` // Contract URL
+	Paused    bool              `json:"paused"`   // If true, no operations allowed
+	Allowed   AllowedOperations `json:"allowed"`  // Allowed operation types and targets
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
+	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
 }
 
 // AllowedOperations defines which L0 operations are permitted
 type AllowedOperations struct {
-	WriteData  []WriteDataPermission  `json:"write_data"`   // WriteData permissions
-	SendTokens []SendTokensPermission `json:"send_tokens"`  // Token transfer permissions
-	UpdateAuth []UpdateAuthPermission `json:"update_auth"`  // Authority update permissions
+	WriteData  []WriteDataPermission  `json:"write_data"`  // WriteData permissions
+	SendTokens []SendTokensPermission `json:"send_tokens"` // Token transfer permissions
+	UpdateAuth []UpdateAuthPermission `json:"update_auth"` // Authority update permissions
 }
 
 // WriteDataPermission defines permissions for WriteData operations
 type WriteDataPermission struct {
-	Target      string `json:"target"`       // Target account URL pattern (e.g., "acc://data.acme/*")
-	MaxSize     uint64 `json:"max_size"`     // Maximum data size in bytes
-	MaxPerBlock uint64 `json:"max_per_block"` // Maximum operations per block
+	Target      string `json:"target"`                 // Target account URL pattern (e.g., "acc://data.acme/*")
+	MaxSize     uint64 `json:"max_size"`               // Maximum data size in bytes
+	MaxPerBlock uint64 `json:"max_per_block"`          // Maximum operations per block
 	ContentType string `json:"content_type,omitempty"` // Allowed content type pattern
 }
 
 // SendTokensPermission defines permissions for token transfers
 type SendTokensPermission struct {
-	From        string `json:"from"`         // Source account URL pattern
-	To          string `json:"to"`           // Destination account URL pattern
-	TokenURL    string `json:"token_url"`    // Token type URL
-	MaxAmount   uint64 `json:"max_amount"`   // Maximum amount per operation
+	From        string `json:"from"`          // Source account URL pattern
+	To          string `json:"to"`            // Destination account URL pattern
+	TokenURL    string `json:"token_url"`     // Token type URL
+	MaxAmount   uint64 `json:"max_amount"`    // Maximum amount per operation
 	MaxPerBlock uint64 `json:"max_per_block"` // Maximum operations per block
 }
 
 // UpdateAuthPermission defines permissions for authority updates
 type UpdateAuthPermission struct {
-	Target      string `json:"target"`       // Target account URL pattern
-	Operations  []string `json:"operations"`  // Allowed operations (add_authority, remove_authority, etc.)
-	MaxPerBlock uint64 `json:"max_per_block"` // Maximum operations per block
+	Target      string   `json:"target"`        // Target account URL pattern
+	Operations  []string `json:"operations"`    // Allowed operations (add_authority, remove_authority, etc.)
+	MaxPerBlock uint64   `json:"max_per_block"` // Maximum operations per block
 }
 
 // DefaultAuthorityScope returns a restrictive default scope
@@ -562,9 +562,9 @@ func (scope *AuthorityScope) HasSendTokensPermission(from, to, tokenURL string, 
 
 	for _, perm := range scope.Allowed.SendTokens {
 		if matchesPattern(from, perm.From) &&
-		   matchesPattern(to, perm.To) &&
-		   matchesPattern(tokenURL, perm.TokenURL) &&
-		   amount <= perm.MaxAmount {
+			matchesPattern(to, perm.To) &&
+			matchesPattern(tokenURL, perm.TokenURL) &&
+			amount <= perm.MaxAmount {
 			return &perm
 		}
 	}
@@ -653,11 +653,11 @@ func SetPaused(ctx context.Context, client *v3.Client, dnURL, contractURL *url.U
 	// Create WriteData transaction to update the scope
 	memo := fmt.Sprintf("Update contract pause status: %s -> %t", contractURL.String(), paused)
 	envelope := l0api.BuildWriteData(scopeURL, scopeData, memo, map[string]interface{}{
-		"action":     "set_paused",
-		"contract":   contractURL.String(),
-		"paused":     paused,
-		"version":    updatedScope.Version,
-		"timestamp":  updatedScope.UpdatedAt.Unix(),
+		"action":    "set_paused",
+		"contract":  contractURL.String(),
+		"paused":    paused,
+		"version":   updatedScope.Version,
+		"timestamp": updatedScope.UpdatedAt.Unix(),
 	})
 
 	// Submit the transaction

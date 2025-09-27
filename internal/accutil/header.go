@@ -19,55 +19,41 @@ type CrossLinkMetadata struct {
 	Timestamp   int64  `json:"timestamp"`         // Unix timestamp of L1 transaction
 }
 
-// WithMemo sets the memo field on a transaction envelope
-func WithMemo(env *build.EnvelopeBuilder, memo string) *build.EnvelopeBuilder {
-	if env == nil {
-		return nil
-	}
-
+// WithMemo sets the memo field on a transaction builder
+func WithMemo(builder build.TransactionBuilder, memo string) build.TransactionBuilder {
 	if memo == "" {
-		return env
+		return builder
 	}
 
 	// Use the builder's memo functionality
-	return env.Memo(memo)
+	return builder.Memo(memo)
 }
 
-// WithMetadataJSON sets the metadata field on a transaction envelope with JSON-encoded data
-func WithMetadataJSON(env *build.EnvelopeBuilder, v any) error {
-	if env == nil {
-		return fmt.Errorf("envelope builder cannot be nil")
-	}
-
+// WithMetadataJSON sets the metadata field on a transaction builder with JSON-encoded data
+func WithMetadataJSON(builder build.TransactionBuilder, v any) (build.TransactionBuilder, error) {
 	if v == nil {
-		return nil // No metadata to add
+		return builder, nil // No metadata to add
 	}
 
 	// Marshal the value to JSON
 	metadataBytes, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Errorf("failed to marshal metadata to JSON: %w", err)
+		return builder, fmt.Errorf("failed to marshal metadata to JSON: %w", err)
 	}
 
-	// Set the metadata on the envelope
-	env.Metadata(metadataBytes)
-
-	return nil
+	// Set the metadata on the builder
+	return builder.Metadata(metadataBytes), nil
 }
 
 // WithCrossLink embeds L1→L0 cross-linking information in the transaction
 // This puts a short reference in the Memo field and full metadata in the Metadata field
-func WithCrossLink(env *build.EnvelopeBuilder, l1TxHash [32]byte) error {
-	if env == nil {
-		return fmt.Errorf("envelope builder cannot be nil")
-	}
-
+func WithCrossLink(builder build.TransactionBuilder, l1TxHash [32]byte) (build.TransactionBuilder, error) {
 	// Create short hash reference for memo (first 8 bytes as hex)
 	shortHash := hex.EncodeToString(l1TxHash[:8])
 	memo := fmt.Sprintf("L1:%s", shortHash)
 
 	// Set the memo with short reference
-	env.Memo(memo)
+	builder = builder.Memo(memo)
 
 	// Create full cross-link metadata
 	fullHash := hex.EncodeToString(l1TxHash[:])
@@ -77,25 +63,22 @@ func WithCrossLink(env *build.EnvelopeBuilder, l1TxHash [32]byte) error {
 	}
 
 	// Add the full metadata
-	if err := WithMetadataJSON(env, crossLink); err != nil {
-		return fmt.Errorf("failed to add cross-link metadata: %w", err)
+	builder, err := WithMetadataJSON(builder, crossLink)
+	if err != nil {
+		return builder, fmt.Errorf("failed to add cross-link metadata: %w", err)
 	}
 
-	return nil
+	return builder, nil
 }
 
 // WithCrossLinkDetailed embeds detailed L1→L0 cross-linking information
-func WithCrossLinkDetailed(env *build.EnvelopeBuilder, l1TxHash [32]byte, l1Height, l1Index uint64, chainID, contractURL string, timestamp int64) error {
-	if env == nil {
-		return fmt.Errorf("envelope builder cannot be nil")
-	}
-
+func WithCrossLinkDetailed(builder build.TransactionBuilder, l1TxHash [32]byte, l1Height, l1Index uint64, chainID, contractURL string, timestamp int64) (build.TransactionBuilder, error) {
 	// Create short hash reference for memo (first 8 bytes as hex)
 	shortHash := hex.EncodeToString(l1TxHash[:8])
 	memo := fmt.Sprintf("L1:%s@%d", shortHash, l1Height)
 
 	// Set the memo with short reference including height
-	env.Memo(memo)
+	builder = builder.Memo(memo)
 
 	// Create detailed cross-link metadata
 	fullHash := hex.EncodeToString(l1TxHash[:])
@@ -110,11 +93,12 @@ func WithCrossLinkDetailed(env *build.EnvelopeBuilder, l1TxHash [32]byte, l1Heig
 	}
 
 	// Add the full metadata
-	if err := WithMetadataJSON(env, crossLink); err != nil {
-		return fmt.Errorf("failed to add detailed cross-link metadata: %w", err)
+	builder, err := WithMetadataJSON(builder, crossLink)
+	if err != nil {
+		return builder, fmt.Errorf("failed to add detailed cross-link metadata: %w", err)
 	}
 
-	return nil
+	return builder, nil
 }
 
 // ExtractCrossLink extracts cross-link metadata from transaction metadata
@@ -219,13 +203,9 @@ func BuildL1Reference(l1TxHash [32]byte, l1Height uint64) string {
 
 // WithL1Origin sets both memo and metadata for L1-originated transactions
 // This is a convenience function that combines WithMemo and WithCrossLinkDetailed
-func WithL1Origin(env *build.EnvelopeBuilder, l1TxHash [32]byte, l1Height, l1Index uint64, chainID, contractURL string, timestamp int64) error {
-	if env == nil {
-		return fmt.Errorf("envelope builder cannot be nil")
-	}
-
+func WithL1Origin(builder build.TransactionBuilder, l1TxHash [32]byte, l1Height, l1Index uint64, chainID, contractURL string, timestamp int64) (build.TransactionBuilder, error) {
 	// Add detailed cross-link information
-	return WithCrossLinkDetailed(env, l1TxHash, l1Height, l1Index, chainID, contractURL, timestamp)
+	return WithCrossLinkDetailed(builder, l1TxHash, l1Height, l1Index, chainID, contractURL, timestamp)
 }
 
 // AccumenMetadata represents Accumen-specific metadata for L0 transactions
@@ -238,11 +218,7 @@ type AccumenMetadata struct {
 }
 
 // WithAccumenMetadata adds Accumen-specific metadata to a transaction
-func WithAccumenMetadata(env *build.EnvelopeBuilder, sequencerID string, l1CrossLink *CrossLinkMetadata) error {
-	if env == nil {
-		return fmt.Errorf("envelope builder cannot be nil")
-	}
-
+func WithAccumenMetadata(builder build.TransactionBuilder, sequencerID string, l1CrossLink *CrossLinkMetadata) (build.TransactionBuilder, error) {
 	metadata := AccumenMetadata{
 		Version:     "1.0",
 		Source:      "accumen-sequencer",
@@ -250,17 +226,13 @@ func WithAccumenMetadata(env *build.EnvelopeBuilder, sequencerID string, l1Cross
 		L1CrossLink: l1CrossLink,
 	}
 
-	return WithMetadataJSON(env, metadata)
+	return WithMetadataJSON(builder, metadata)
 }
 
 // WithCustomMetadata adds custom key-value metadata to a transaction
-func WithCustomMetadata(env *build.EnvelopeBuilder, key string, value any) error {
-	if env == nil {
-		return fmt.Errorf("envelope builder cannot be nil")
-	}
-
+func WithCustomMetadata(builder build.TransactionBuilder, key string, value any) (build.TransactionBuilder, error) {
 	if key == "" {
-		return fmt.Errorf("metadata key cannot be empty")
+		return builder, fmt.Errorf("metadata key cannot be empty")
 	}
 
 	// Create a simple key-value metadata structure
@@ -268,7 +240,7 @@ func WithCustomMetadata(env *build.EnvelopeBuilder, key string, value any) error
 		key: value,
 	}
 
-	return WithMetadataJSON(env, metadata)
+	return WithMetadataJSON(builder, metadata)
 }
 
 // ChainMetadata adds metadata to identify the transaction as part of a chain

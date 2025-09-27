@@ -77,8 +77,8 @@ func DefaultLimits() *Limits {
 		MaxOutputsPerMinute: 100,
 		MaxOutputsPerHour:   1000,
 		MaxMemoryUsage:      100 * 1024 * 1024, // 100MB
-		MaxGasPerOutput:     1000000,            // 1M gas
-		MaxTotalGas:         10000000,           // 10M gas
+		MaxGasPerOutput:     1000000,           // 1M gas
+		MaxTotalGas:         10000000,          // 10M gas
 		MinPriority:         0,
 		MaxPriority:         1000,
 		ChainLimits: map[string]*ChainLimits{
@@ -116,8 +116,8 @@ func StrictLimits() *Limits {
 		MaxOutputsPerMinute: 50,
 		MaxOutputsPerHour:   500,
 		MaxMemoryUsage:      50 * 1024 * 1024, // 50MB
-		MaxGasPerOutput:     500000,            // 500K gas
-		MaxTotalGas:         5000000,           // 5M gas
+		MaxGasPerOutput:     500000,           // 500K gas
+		MaxTotalGas:         5000000,          // 5M gas
 		MinPriority:         10,
 		MaxPriority:         500,
 		ChainLimits: map[string]*ChainLimits{
@@ -376,7 +376,7 @@ type OperationCounter struct {
 type OperationCounterKey struct {
 	ContractURL string `json:"contractUrl"`
 	OpType      string `json:"opType"`
-	Period      string `json:"period"` // "hourly" or "daily"
+	Period      string `json:"period"`    // "hourly" or "daily"
 	Timestamp   string `json:"timestamp"` // Hour: "2024-01-01T15" or Day: "2024-01-01"
 }
 
@@ -546,7 +546,7 @@ func (oc *OperationCounter) CleanupExpiredCounters() error {
 	defer oc.mu.Unlock()
 
 	now := time.Now().UTC()
-	cutoffDaily := now.AddDate(0, 0, -7).Format("2006-01-02")   // Keep 7 days
+	cutoffDaily := now.AddDate(0, 0, -7).Format("2006-01-02")  // Keep 7 days
 	cutoffHourly := now.AddDate(0, 0, -2).Format("2006-01-02") // Keep 2 days for hourly
 
 	// Create an iterator for all operation counter keys

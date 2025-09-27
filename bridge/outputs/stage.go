@@ -12,15 +12,15 @@ import (
 
 // StagedOutput represents an output that has been staged for submission
 type StagedOutput struct {
-	ID          string                   `json:"id"`
-	Envelope    *messaging.Envelope      `json:"envelope"`
-	Status      StageStatus              `json:"status"`
-	CreatedAt   time.Time                `json:"created_at"`
-	UpdatedAt   time.Time                `json:"updated_at"`
-	SubmittedAt *time.Time               `json:"submitted_at,omitempty"`
-	Metadata    *OutputMetadata          `json:"metadata"`
-	Dependencies []string                `json:"dependencies,omitempty"`
-	Priority    int                      `json:"priority"`
+	ID           string              `json:"id"`
+	Envelope     *messaging.Envelope `json:"envelope"`
+	Status       StageStatus         `json:"status"`
+	CreatedAt    time.Time           `json:"created_at"`
+	UpdatedAt    time.Time           `json:"updated_at"`
+	SubmittedAt  *time.Time          `json:"submitted_at,omitempty"`
+	Metadata     *OutputMetadata     `json:"metadata"`
+	Dependencies []string            `json:"dependencies,omitempty"`
+	Priority     int                 `json:"priority"`
 }
 
 // StageStatus represents the status of a staged output
@@ -58,22 +58,22 @@ func (s StageStatus) String() string {
 // OutputMetadata contains metadata for a staged output
 type OutputMetadata struct {
 	// Source information
-	SequencerID   string `json:"sequencer_id"`
-	BlockHeight   uint64 `json:"block_height"`
-	OutputIndex   uint64 `json:"output_index"`
+	SequencerID string `json:"sequencer_id"`
+	BlockHeight uint64 `json:"block_height"`
+	OutputIndex uint64 `json:"output_index"`
 
 	// Timing information
-	ExpiresAt     time.Time `json:"expires_at"`
-	RetryCount    int       `json:"retry_count"`
-	MaxRetries    int       `json:"max_retries"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	RetryCount int       `json:"retry_count"`
+	MaxRetries int       `json:"max_retries"`
 
 	// Cost information
 	EstimatedCost uint64 `json:"estimated_cost"`
 	ActualCost    uint64 `json:"actual_cost,omitempty"`
 
 	// Error information
-	LastError     string    `json:"last_error,omitempty"`
-	ErrorAt       time.Time `json:"error_at,omitempty"`
+	LastError string    `json:"last_error,omitempty"`
+	ErrorAt   time.Time `json:"error_at,omitempty"`
 }
 
 // OutputStager manages the staging of outputs for submission to Accumulate L0

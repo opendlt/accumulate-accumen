@@ -20,7 +20,7 @@ func NewMultiSigner(signers ...Signer) *MultiSigner {
 }
 
 // SignEnvelope adds signatures from all configured signers to the envelope
-func (m *MultiSigner) SignEnvelope(envelope *build.EnvelopeBuilder) error {
+func (m *MultiSigner) SignEnvelope(envelope *build.SignatureBuilder) error {
 	if m == nil {
 		return fmt.Errorf("MultiSigner is nil")
 	}
