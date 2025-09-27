@@ -2473,3 +2473,304 @@ export API_KEY_2="staging-key-abcdef1234567890"
 ```
 
 This configuration provides enterprise-grade security and reliability for production Accumen deployments.
+
+## Prometheus Metrics and Observability
+
+Accumen provides rich observability through Prometheus metrics when built with the `prom` build tag. This enables detailed monitoring and alerting for production deployments.
+
+### Building with Prometheus Support
+
+To enable Prometheus metrics, build with the `prom` tag:
+
+```bash
+# Build sequencer with Prometheus support
+go build -tags=prom -o bin/accumen ./cmd/accumen
+
+# Build follower with Prometheus support
+go build -tags=prom -o bin/accumen-follower ./cmd/accumen-follower
+
+# Build both using Makefile
+make build TAGS=prom
+```
+
+### Metrics Endpoints
+
+When built with Prometheus support, the following endpoints are available:
+
+- **`/metrics`** - Prometheus metrics endpoint (requires `-tags=prom`)
+- **`/debug/vars`** - Expvar metrics in JSON format
+- **`/healthz`** - Basic health check
+- **`/health/ready`** - Readiness check
+- **`/health/live`** - Liveness check
+
+#### Without Prometheus Support
+
+If built without the `prom` tag, the `/metrics` endpoint returns:
+
+```
+404 Not Found
+Prometheus metrics not available - build with -tags=prom to enable
+```
+
+### Available Metrics
+
+#### Counter Metrics
+
+- **`accumen_blocks_produced_total`** - Total blocks produced by sequencer
+- **`accumen_transactions_executed_total`** - Total transactions executed
+- **`accumen_l0_submitted_total`** - Successful L0 submissions to Accumulate
+- **`accumen_l0_failed_total`** - Failed L0 submissions
+- **`accumen_anchors_written_total`** - Anchors written to DN
+- **`accumen_wasm_gas_used_total`** - Total WASM gas consumed
+- **`accumen_indexer_entries_processed_total`** - Entries processed by follower
+
+#### Gauge Metrics
+
+- **`accumen_current_height`** - Current block height
+- **`accumen_follower_height`** - Follower sync height
+- **`accumen_mempool_size`** - Current mempool transaction count
+- **`accumen_mempool_accounts`** - Unique accounts in mempool
+
+### Prometheus Configuration
+
+Add Accumen to your `prometheus.yml`:
+
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'accumen-sequencer'
+    static_configs:
+      - targets: ['localhost:8667']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  - job_name: 'accumen-follower'
+    static_configs:
+      - targets: ['localhost:8668']
+    metrics_path: /metrics
+    scrape_interval: 10s
+```
+
+### Grafana Dashboard
+
+Import the provided Grafana dashboard for comprehensive monitoring:
+
+#### Manual Import
+
+1. Open Grafana UI
+2. Navigate to **Dashboards** → **Import**
+3. Upload `ops/grafana/dashboard.json`
+4. Configure data source as your Prometheus instance
+5. Click **Import**
+
+#### Dashboard Features
+
+The dashboard includes:
+
+- **Block Production Rate** - Blocks per second over time
+- **Transaction Execution Rate** - Transactions per second over time
+- **L0 Submission Rate** - Success/failure rates for L0 bridge
+- **WASM Gas Usage Rate** - Gas consumption over time
+- **Mempool Size** - Transaction and account counts
+- **Block Height** - Current and follower heights
+- **Summary Stats** - Total blocks, transactions, gas, failures
+
+#### Dashboard JSON
+
+The dashboard is located at `ops/grafana/dashboard.json` and includes:
+
+```json
+{
+  "title": "Accumen Blockchain Dashboard",
+  "tags": ["accumen", "blockchain", "metrics"],
+  "panels": [
+    {
+      "title": "Block Production Rate",
+      "targets": [
+        {
+          "expr": "rate(accumen_blocks_produced_total[5m])",
+          "legendFormat": "Blocks per second"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Example Queries
+
+#### PromQL Examples
+
+```promql
+# Block production rate (blocks/sec)
+rate(accumen_blocks_produced_total[5m])
+
+# Transaction throughput (tx/sec)
+rate(accumen_transactions_executed_total[5m])
+
+# L0 bridge success rate
+rate(accumen_l0_submitted_total[5m]) /
+(rate(accumen_l0_submitted_total[5m]) + rate(accumen_l0_failed_total[5m]))
+
+# Average gas per transaction
+rate(accumen_wasm_gas_used_total[5m]) /
+rate(accumen_transactions_executed_total[5m])
+
+# Follower lag (blocks behind)
+accumen_current_height - accumen_follower_height
+```
+
+### Alerting Rules
+
+#### Critical Alerts
+
+```yaml
+groups:
+  - name: accumen.critical
+    rules:
+      - alert: AccumenBlockProductionStopped
+        expr: increase(accumen_blocks_produced_total[5m]) == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Accumen block production has stopped"
+          description: "No blocks produced in last 5 minutes"
+
+      - alert: AccumenHighL0FailureRate
+        expr: |
+          rate(accumen_l0_failed_total[5m]) /
+          (rate(accumen_l0_submitted_total[5m]) + rate(accumen_l0_failed_total[5m])) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High L0 submission failure rate"
+          description: "L0 failure rate: {{ $value | humanizePercentage }}"
+```
+
+#### Warning Alerts
+
+```yaml
+  - name: accumen.warning
+    rules:
+      - alert: AccumenMempoolFull
+        expr: accumen_mempool_size > 40000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Accumen mempool is nearly full"
+          description: "Mempool size: {{ $value }} transactions"
+
+      - alert: AccumenFollowerLagging
+        expr: accumen_current_height - accumen_follower_height > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Follower is lagging behind sequencer"
+          description: "Follower is {{ $value }} blocks behind"
+```
+
+### Development Workflow
+
+#### Local Development
+
+```bash
+# 1. Build with Prometheus support
+go build -tags=prom -o bin/accumen ./cmd/accumen
+
+# 2. Start Accumen
+./bin/accumen --config=config/local.yaml --role=sequencer
+
+# 3. Check metrics are available
+curl http://localhost:8667/metrics
+
+# 4. Run Prometheus locally
+docker run -p 9090:9090 \
+  -v $(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml \
+  prom/prometheus
+
+# 5. Import Grafana dashboard
+# Upload ops/grafana/dashboard.json to Grafana UI
+```
+
+#### Production Deployment
+
+```bash
+# 1. Build production binaries with Prometheus
+make build-release TAGS=prom
+
+# 2. Deploy with monitoring stack
+docker-compose -f docker-compose.prod.yaml up -d
+
+# 3. Verify metrics collection
+curl https://metrics.example.com:8667/metrics
+
+# 4. Import dashboard to production Grafana
+# Configure alerting rules in production Prometheus
+```
+
+### Metrics Architecture
+
+#### Metric Synchronization
+
+The Prometheus metrics mirror the existing expvar metrics:
+
+```go
+// Synchronizes expvar counters with Prometheus counters
+func updatePrometheusMetrics() {
+    promBlocksProduced.Add(float64(blocksProduced.Value()) - getPromCounterValue(promBlocksProduced))
+    promTxsExecuted.Add(float64(txsExecuted.Value()) - getPromCounterValue(promTxsExecuted))
+    // ... other metrics
+}
+```
+
+#### Build Tags
+
+- **With `prom` tag**: Full Prometheus integration with `/metrics` endpoint
+- **Without `prom` tag**: Expvar-only metrics, `/metrics` returns 404
+
+#### Performance Impact
+
+- Minimal overhead when built with `prom` tag
+- Zero overhead when built without `prom` tag
+- Metrics updated every 10 seconds by default
+
+### Troubleshooting
+
+#### Metrics Not Available
+
+```bash
+# Check if built with prom tag
+curl http://localhost:8667/metrics
+# Should return Prometheus format, not 404
+
+# Rebuild with prom tag if needed
+go build -tags=prom -o bin/accumen ./cmd/accumen
+```
+
+#### Missing Metrics
+
+```bash
+# Check expvar metrics for comparison
+curl http://localhost:8667/debug/vars
+
+# Verify metric registration
+grep "MustRegister" internal/metrics/prom.go
+```
+
+#### High Cardinality
+
+```bash
+# Monitor metric cardinality in Prometheus
+curl http://localhost:9090/api/v1/label/__name__/values | jq '.data | length'
+
+# Review metric labels for optimization
+curl http://localhost:8667/metrics | grep accumen_ | head -10
+```
+
+The Prometheus integration provides production-grade observability for Accumen deployments, enabling proactive monitoring, alerting, and performance optimization.
