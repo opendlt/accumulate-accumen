@@ -1392,6 +1392,293 @@ accucli authority list --config ./accumen.yaml
 
 This ensures that the contract-specific signer selection works correctly with your multi-signature workflow.
 
+## Tokens on L1 (ACME as base currency; Credits from L0)
+
+Accumen provides ready-to-use token implementations that demonstrate how to build DeFi applications on L1 while leveraging L0's credit system. These examples show how ACME tokens burned on L0 provide credits for L1 operations.
+
+### Token Standard Examples
+
+The SDK includes three standard token implementations in Rust:
+
+#### ERC20 - Fungible Tokens
+
+**Location**: `sdk/rust/examples/erc20/`
+
+A standard fungible token implementation with mint, burn, transfer, and approval functionality:
+
+```rust
+// Core ERC20 functions
+#[no_mangle]
+pub extern "C" fn mint(to_ptr: *const u8, to_len: usize, amount: u64);
+
+#[no_mangle]
+pub extern "C" fn transfer(to_ptr: *const u8, to_len: usize, amount: u64) -> bool;
+
+#[no_mangle]
+pub extern "C" fn approve(spender_ptr: *const u8, spender_len: usize, amount: u64) -> bool;
+
+#[no_mangle]
+pub extern "C" fn balance_of(account_ptr: *const u8, account_len: usize) -> u64;
+```
+
+**Features**:
+- **State management**: Balances and allowances stored in HashMap
+- **Events**: Transfer and Approval events emitted for indexing
+- **Access control**: Simplified permission model (expandable)
+- **L0 integration**: Metadata written to DN for all operations
+
+**Build and deploy**:
+```bash
+cd sdk/rust/examples/erc20
+cargo build --target wasm32-unknown-unknown --release
+
+# Deploy to Accumen
+./bin/accucli deploy \
+  --addr=acc://game-tokens.acme \
+  --wasm=target/wasm32-unknown-unknown/release/erc20_example.wasm \
+  --rpc=http://localhost:8666
+```
+
+#### ERC721 - Non-Fungible Tokens (NFTs)
+
+**Location**: `sdk/rust/examples/erc721/`
+
+A complete NFT implementation with ownership, transfers, and approvals:
+
+```rust
+// Core ERC721 functions
+#[no_mangle]
+pub extern "C" fn mint(to_ptr: *const u8, to_len: usize, uri_ptr: *const u8, uri_len: usize) -> u64;
+
+#[no_mangle]
+pub extern "C" fn transfer_from(from_ptr: *const u8, from_len: usize, to_ptr: *const u8, to_len: usize, token_id: u64);
+
+#[no_mangle]
+pub extern "C" fn approve(to_ptr: *const u8, to_len: usize, token_id: u64);
+
+#[no_mangle]
+pub extern "C" fn owner_of(token_id: u64) -> *const u8;
+```
+
+**Features**:
+- **Unique ownership**: Each token has a single owner
+- **Metadata URIs**: Token metadata stored with URIs
+- **Operator approvals**: Approve all tokens or individual tokens
+- **Enumeration**: Balance tracking per owner
+
+**Use cases**:
+- Digital collectibles
+- Game items and artifacts
+- Identity tokens
+- Certificate of authenticity
+
+#### ERC1155 - Multi-Token Standard
+
+**Location**: `sdk/rust/examples/erc1155/`
+
+A flexible multi-token standard supporting both fungible and non-fungible tokens:
+
+```rust
+// Core ERC1155 functions
+#[no_mangle]
+pub extern "C" fn mint_batch(to_ptr: *const u8, to_len: usize, ids_ptr: *const u8, ids_len: usize, amounts_ptr: *const u8, amounts_len: usize);
+
+#[no_mangle]
+pub extern "C" fn safe_batch_transfer_from(from_ptr: *const u8, from_len: usize, to_ptr: *const u8, to_len: usize, ids_ptr: *const u8, ids_len: usize, amounts_ptr: *const u8, amounts_len: usize);
+
+#[no_mangle]
+pub extern "C" fn balance_of_batch(accounts_ptr: *const u8, accounts_len: usize, ids_ptr: *const u8, ids_len: usize) -> *const u8;
+```
+
+**Features**:
+- **Batch operations**: Mint and transfer multiple token types at once
+- **Mixed tokens**: Fungible and non-fungible in same contract
+- **Gas efficiency**: Batch operations reduce transaction costs
+- **Flexible metadata**: URI pattern for token metadata
+
+**Use cases**:
+- Gaming ecosystems (weapons, armor, consumables)
+- DeFi baskets (multiple assets in one transaction)
+- Supply chain tracking (batch processing)
+
+### Economic Model
+
+The token examples demonstrate Accumen's dual-layer economics:
+
+#### L0 Foundation Layer
+- **ACME base currency**: Native token of Accumulate network
+- **Credit system**: ACME burned → Credits issued for L1 operations
+- **Authority chain**: L0 identities control L1 contract permissions
+
+#### L1 Application Layer
+- **Custom tokens**: Application-specific currencies and assets
+- **Gas payment**: L1 operations consume L0 credits
+- **Cross-layer value**: L1 tokens can represent L0 assets or vice versa
+
+### Running the Token Tests
+
+Comprehensive end-to-end tests demonstrate full token lifecycle:
+
+```bash
+# Set environment variable to enable simulator tests
+export ACC_SIM=1
+
+# Run all token tests
+go test ./tests/e2e -run TestTokenExamples -v
+
+# Run specific token test
+go test ./tests/e2e -run TestTokenExamples/ERC20 -v
+go test ./tests/e2e -run TestTokenExamples/ERC721 -v
+go test ./tests/e2e -run TestTokenExamples/ERC1155 -v
+```
+
+**Test flow for each token standard**:
+
+1. **Setup**: Start Accumulate simulator and Accumen sequencer
+2. **Deploy**: Deploy token contract to L1
+3. **Operations**: Execute token operations (mint, transfer, etc.)
+4. **Verification**: Verify DN metadata writes for all operations
+5. **L0 integration**: Confirm metadata stored in Accumulate DN
+
+**Expected output**:
+```
+=== RUN   TestTokenExamples/ERC20
+    tokens_test.go:45: 🚀 Starting ERC20 Token Test
+    tokens_test.go:89: ✅ Sequencer started successfully
+    tokens_test.go:96: 📦 Deploying ERC20 contract at acc://erc20-test.acme
+    tokens_test.go:99: ✅ ERC20 contract deployed with tx hash: deploy-acc://erc20-test.acme-1640995200
+    tokens_test.go:106: 💰 Minting 1000 tokens to acc://test-user.acme
+    tokens_test.go:112: ✅ Mint transaction hash: invoke-acc://erc20-test.acme-mint-1640995202
+    tokens_test.go:118: 💸 Transferring 100 tokens from acc://test-user.acme to acc://recipient.acme
+    tokens_test.go:124: ✅ Transfer transaction hash: invoke-acc://erc20-test.acme-transfer-1640995204
+    tokens_test.go:131: 🔍 Verifying DN metadata writes for ERC20 operations
+    tokens_test.go:135: ✅ Verified metadata at acc://accumen-metadata.acme/2024/01/15/tx-deploy-acc://erc20-test.acme-1640995200.json
+    tokens_test.go:139: 🎉 ERC20 Token Test completed successfully
+--- PASS: TestTokenExamples/ERC20 (12.34s)
+```
+
+### Integration Patterns
+
+#### Game Economy Example
+
+```rust
+// Multi-token game economy using ERC20 + ERC721 + ERC1155
+#[no_mangle]
+pub extern "C" fn purchase_item_with_tokens() {
+    // 1. Check ERC20 balance (game currency)
+    let currency_balance = erc20_balance_of(&caller);
+    require(currency_balance >= item_price, "Insufficient currency");
+
+    // 2. Burn ERC20 tokens
+    erc20_burn(&caller, item_price);
+
+    // 3. Mint ERC721 unique item
+    let item_id = erc721_mint(&caller, &item_metadata_uri);
+
+    // 4. Grant ERC1155 consumables as bonus
+    erc1155_mint(&caller, &[health_potion_id], &[5]);
+
+    // 5. Emit game event (automatically written to DN)
+    emit_event(&PurchaseEvent { item_id, price: item_price });
+}
+```
+
+#### DeFi Basket Example
+
+```rust
+// ERC1155 representing basket of L0 assets
+#[no_mangle]
+pub extern "C" fn create_asset_basket() {
+    // Token ID represents different asset types
+    let asset_ids = vec![1, 2, 3]; // ACME, STBL, other tokens
+    let amounts = vec![100, 200, 50];
+
+    // Mint basket tokens to user
+    erc1155_mint_batch(&caller, &asset_ids, &amounts);
+
+    // Stage L0 operations to lock underlying assets
+    for (asset_id, amount) in asset_ids.iter().zip(amounts.iter()) {
+        l0_lock_tokens(*asset_id, *amount);
+    }
+}
+```
+
+### Credit Consumption Model
+
+Each token operation consumes L0 credits according to complexity:
+
+| Operation | Credit Cost | L0 Metadata Size |
+|-----------|------------|------------------|
+| ERC20 transfer | ~100 credits | ~512 bytes |
+| ERC721 mint | ~150 credits | ~768 bytes |
+| ERC1155 batch (5 items) | ~300 credits | ~1024 bytes |
+| Contract deployment | ~1000 credits | ~2048 bytes |
+
+**Credit provisioning**:
+```bash
+# Check current credits
+curl -X POST http://localhost:26660/v3 \
+  -d '{"method": "query", "params": {"url": "acc://my-key-page.acme"}}'
+
+# Add credits by burning ACME
+curl -X POST http://localhost:26660/v3 \
+  -d '{
+    "method": "execute",
+    "params": {
+      "envelope": "...",
+      "transaction": {"type": "addCredits", "amount": 1000000}
+    }
+  }'
+```
+
+### Production Deployment
+
+#### Multi-Sequencer Setup
+
+```yaml
+# config/production.yaml
+sequencers:
+  - role: primary
+    addr: "seq1.example.com:8666"
+    tokens: ["acc://game-tokens.acme", "acc://game-items.acme"]
+  - role: replica
+    addr: "seq2.example.com:8666"
+    tokens: ["acc://defi-basket.acme"]
+
+# Load balancing token operations across sequencers
+```
+
+#### Monitoring Token Operations
+
+```promql
+# Prometheus queries for token operations
+rate(accumen_transactions_executed_total{contract=~".*token.*"}[5m])
+
+# Token-specific error rates
+rate(accumen_l0_failed_total{contract="acc://game-tokens.acme"}[5m])
+
+# Credit consumption by token type
+increase(accumen_wasm_gas_used_total{contract=~".*erc.*"}[1h])
+```
+
+### Security Considerations
+
+1. **Access control**: Implement proper mint/burn permissions
+2. **Overflow protection**: Use safe arithmetic for balance operations
+3. **Reentrancy**: Guard against cross-contract call attacks
+4. **L0 authority**: Ensure proper L0 identity binding for contract operations
+5. **Credit management**: Monitor and maintain L0 credit balances
+
+### Next Steps for Token Development
+
+1. **Custom implementations**: Extend examples for specific use cases
+2. **Cross-chain bridges**: Connect L1 tokens to other networks
+3. **DeFi protocols**: Build lending, swapping, and yield farming
+4. **NFT marketplaces**: Create trading platforms for ERC721/1155
+5. **Governance tokens**: Implement voting and proposal systems
+
+The token examples provide a solid foundation for building sophisticated DeFi and gaming applications on Accumen while leveraging Accumulate's robust L0 infrastructure.
+
 ## Next Steps
 
 - Explore more complex contract patterns
