@@ -282,6 +282,7 @@ func startMetricsServer(addr string) {
 
 	// Mount observability endpoints
 	mux.Handle("/debug/vars", metrics.Handler())
+	mux.Handle("/metrics", metrics.PrometheusHandler())
 	mux.HandleFunc("/healthz", health.SimpleHandler())
 	mux.HandleFunc("/health/ready", health.ReadinessHandler())
 	mux.HandleFunc("/health/live", health.LivenessHandler())
