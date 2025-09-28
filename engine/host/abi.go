@@ -4,10 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"github.com/tetratelabs/wazero/api"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+	"gitlab.com/accumulatenetwork/accumulate/protocol"
 
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
@@ -275,8 +274,8 @@ func (h *HostAPI) l0ReadDataEntry(ctx context.Context, m api.Module, urlPtr, url
 		return 1
 	}
 
-	// Read key from memory
-	keyBytes, ok := m.Memory().Read(keyPtr, keyLen)
+	// Read key from memory (unused for now since QueryDataEntry is not implemented)
+	_, ok = m.Memory().Read(keyPtr, keyLen)
 	if !ok {
 		return 1
 	}
@@ -287,15 +286,18 @@ func (h *HostAPI) l0ReadDataEntry(ctx context.Context, m api.Module, urlPtr, url
 		return 1
 	}
 
-	// Query data entry from L0
-	entryRecord, err := h.querier.QueryDataEntry(ctx, dataURL, string(keyBytes))
+	// Query data account from L0 (QueryDataEntry is not implemented)
+	dataAccount, err := h.querier.QueryDataAccount(ctx, dataURL)
 	if err != nil {
-		return 1 // Entry not found or other error
+		return 1 // Account not found or other error
 	}
 
 	var dataBytes []byte
-	if entryRecord != nil && entryRecord.Entry != nil {
-		dataBytes = entryRecord.Entry.GetData()
+	if dataAccount != nil && dataAccount.Entry != nil {
+		entryData := dataAccount.Entry.GetData()
+		if len(entryData) > 0 {
+			dataBytes = entryData[0] // Use first data chunk
+		}
 	}
 
 	// Charge gas based on bytes read
@@ -359,4 +361,103 @@ func (h *HostAPI) l0CreditsQuote(ctx context.Context, m api.Module, gas uint64, 
 	}
 
 	return 0 // Success
+}
+
+// Exported wrapper methods for runtime use
+
+// Get wraps the get method for runtime use
+func (h *HostAPI) Get(ctx context.Context, m api.Module, keyPtr, keyLen, valuePtr, valueLen uint32) uint32 {
+	return h.get(ctx, m, keyPtr, keyLen, valuePtr)
+}
+
+// Set wraps the set method for runtime use
+func (h *HostAPI) Set(ctx context.Context, m api.Module, keyPtr, keyLen, valuePtr, valueLen uint32) uint32 {
+	return h.set(ctx, m, keyPtr, keyLen, valuePtr, valueLen)
+}
+
+// Delete wraps the delete method for runtime use
+func (h *HostAPI) Delete(ctx context.Context, m api.Module, keyPtr, keyLen uint32) uint32 {
+	return h.delete(ctx, m, keyPtr, keyLen)
+}
+
+// Log wraps the log method for runtime use
+func (h *HostAPI) Log(ctx context.Context, m api.Module, level, msgPtr, msgLen uint32) uint32 {
+	// Ignore level parameter for now and just use the message
+	return h.log(ctx, m, msgPtr, msgLen)
+}
+
+// Stub methods for functionality not yet implemented
+
+// IteratorNew creates a new iterator (stub)
+func (h *HostAPI) IteratorNew(ctx context.Context, m api.Module, prefixPtr, prefixLen uint32) uint32 {
+	return 1 // Error - not implemented
+}
+
+// IteratorNext advances iterator (stub)
+func (h *HostAPI) IteratorNext(ctx context.Context, m api.Module, iteratorID, keyPtr, keyLen, valuePtr, valueLen uint32) uint32 {
+	return 1 // Error - not implemented
+}
+
+// IteratorClose closes iterator (stub)
+func (h *HostAPI) IteratorClose(ctx context.Context, m api.Module, iteratorID uint32) uint32 {
+	return 1 // Error - not implemented
+}
+
+// TxGetID gets transaction ID (stub)
+func (h *HostAPI) TxGetID(ctx context.Context, m api.Module, outputPtr, outputLen uint32) uint32 {
+	return 1 // Error - not implemented
+}
+
+// TxGetSender gets transaction sender (stub)
+func (h *HostAPI) TxGetSender(ctx context.Context, m api.Module, outputPtr, outputLen uint32) uint32 {
+	return 1 // Error - not implemented
+}
+
+// TxGetData gets transaction data (stub)
+func (h *HostAPI) TxGetData(ctx context.Context, m api.Module, outputPtr, outputLen uint32) uint32 {
+	return 1 // Error - not implemented
+}
+
+// GasRemaining gets remaining gas (stub)
+func (h *HostAPI) GasRemaining(ctx context.Context, m api.Module) uint32 {
+	if h.gasMeter != nil {
+		return uint32(h.gasMeter.GasRemaining())
+	}
+	return 0
+}
+
+// GasConsume consumes gas (stub)
+func (h *HostAPI) GasConsume(ctx context.Context, m api.Module, amount uint64) uint32 {
+	if h.gasMeter != nil {
+		if err := h.gasMeter.ConsumeGas(amount); err != nil {
+			return 1 // Error
+		}
+		return 0 // Success
+	}
+	return 1 // Error - no gas meter
+}
+
+// BlockHeight gets current block height (stub)
+func (h *HostAPI) BlockHeight(ctx context.Context, m api.Module) uint64 {
+	return 0 // Stub - return 0 for now
+}
+
+// BlockTimestamp gets current block timestamp (stub)
+func (h *HostAPI) BlockTimestamp(ctx context.Context, m api.Module) uint64 {
+	return 0 // Stub - return 0 for now
+}
+
+// Alloc allocates memory (stub)
+func (h *HostAPI) Alloc(ctx context.Context, m api.Module, size uint32) uint32 {
+	return 0 // Stub - not implemented
+}
+
+// Free frees memory (stub)
+func (h *HostAPI) Free(ctx context.Context, m api.Module, ptr uint32) uint32 {
+	return 0 // Stub - not implemented
+}
+
+// Abort aborts execution (stub)
+func (h *HostAPI) Abort(ctx context.Context, m api.Module, code, msg uint32) uint32 {
+	return code // Return the abort code
 }
