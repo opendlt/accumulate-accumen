@@ -5,9 +5,12 @@ import (
 	"fmt"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 
+	"github.com/opendlt/accumulate-accumen/bridge/l0api"
+	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/host"
 	"github.com/opendlt/accumulate-accumen/engine/state"
@@ -28,7 +31,7 @@ const (
 type Runtime struct {
 	wazeroRuntime  wazero.Runtime
 	compiledModule wazero.CompiledModule
-	hostAPI        *host.API
+	hostAPI        *host.HostAPI
 	config         *RuntimeConfig
 	moduleCache    *ModuleCache
 }
@@ -81,6 +84,8 @@ type Event struct {
 type ExecutionContext struct {
 	stagedOps []*StagedOp
 	events    []*Event
+	querier   *l0api.Querier
+	schedule  *pricing.Schedule
 }
 
 // NewExecutionContext creates a new execution context
@@ -88,6 +93,18 @@ func NewExecutionContext() *ExecutionContext {
 	return &ExecutionContext{
 		stagedOps: make([]*StagedOp, 0),
 		events:    make([]*Event, 0),
+		querier:   nil,
+		schedule:  nil,
+	}
+}
+
+// NewExecutionContextWithDeps creates a new execution context with dependencies
+func NewExecutionContextWithDeps(querier *l0api.Querier, schedule *pricing.Schedule) *ExecutionContext {
+	return &ExecutionContext{
+		stagedOps: make([]*StagedOp, 0),
+		events:    make([]*Event, 0),
+		querier:   querier,
+		schedule:  schedule,
 	}
 }
 
@@ -225,16 +242,10 @@ func NewRuntime(config *RuntimeConfig) (*Runtime, error) {
 
 	// Create wazero runtime with strict deterministic configuration
 	runtimeConfig := wazero.NewRuntimeConfig().
-		// Disable all non-deterministic features for strict determinism
-		WithFeatureSignExtensionOps(false).     // No sign extension ops
-		WithFeatureBulkMemoryOperations(false). // No bulk memory operations
-		WithFeatureReferenceTypes(false).       // No reference types
-		WithFeatureSIMD(false).                 // No SIMD operations
-		WithFeatureMultiValue(false).           // No multi-value returns
-		WithFeatureMutableGlobals(false).       // No mutable globals
-		WithDebugInfoEnabled(config.Debug).
-		// Enable strict deterministic execution
-		WithCoreFeatures(wazero.CoreFeaturesV1) // Use only WASM 1.0 core features
+		// Use only WASM 1.0 core features for strict determinism
+		WithCoreFeatures(api.CoreFeaturesV1).
+		// Limit memory to prevent excessive resource usage
+		WithMemoryLimitPages(config.MaxMemoryPages)
 
 	wazeroRuntime := wazero.NewRuntimeWithConfig(ctx, runtimeConfig)
 
@@ -318,7 +329,7 @@ func (r *Runtime) executeContractWithMode(ctx context.Context, wasmBytes []byte,
 	gasMeter := gas.NewMeter(gas.GasLimit(gasLimit))
 
 	// Create host API
-	r.hostAPI = host.NewAPI(gasMeter, kvStore)
+	r.hostAPI = host.NewHostAPI(gasMeter, kvStore, nil, nil)
 
 	// Create execution context
 	execContext := NewExecutionContext()
@@ -342,15 +353,11 @@ func (r *Runtime) executeContractWithMode(ctx context.Context, wasmBytes []byte,
 
 	// Configure module with strict deterministic settings
 	moduleConfig := wazero.NewModuleConfig().
-		WithArgs("accuwasm").
-		WithStdin(nil).                                                  // No stdin access
-		WithStdout(nil).                                                 // No stdout access
-		WithStderr(nil).                                                 // No stderr access
-		WithSysWalltime(func() (sec int64, nsec int32) { return 0, 0 }). // Fixed time
-		WithSysNanotime(func() int64 { return 0 }).                      // Fixed time
-		WithRandSource(nil).                                             // No random source
-		// Limit memory strictly
-		WithMemoryLimitPages(prepared.Metadata.MaxMemoryPages)
+		WithArgs("accuwasm"). // Predictable args
+		WithStdin(nil).       // No stdin access
+		WithStdout(nil).      // No stdout access
+		WithStderr(nil)       // No stderr access
+		// Note: Time and random sources are handled by default for determinism
 
 	// Instantiate module with the prepared compiled module
 	module, err := r.wazeroRuntime.InstantiateModule(ctx, prepared.Module, moduleConfig)
@@ -390,14 +397,20 @@ func (r *Runtime) executeContractWithMode(ctx context.Context, wasmBytes []byte,
 		returnValue = []byte(fmt.Sprintf("%d", results[0]))
 	}
 
+	// Convert events from runtime type to state type
+	var stateEvents []state.Event
+	for _, event := range execContext.GetEvents() {
+		stateEvents = append(stateEvents, state.Event{
+			Type: event.Type,
+			Data: event.Data,
+		})
+	}
+
 	// Create execution receipt with module information
 	receipt := &state.Receipt{
-		Success:      true,
-		GasUsed:      gasUsed,
-		GasLimit:     gasLimit,
-		FunctionName: functionName,
-		ReturnValue:  returnValue,
-		ModuleHash:   hash[:],
+		GasUsed: gasUsed,
+		Events:  stateEvents,
+		L0TxIDs: []string{}, // TODO: populate with actual L0 transaction IDs if any
 	}
 
 	return &ExecutionResult{
@@ -420,7 +433,7 @@ func (r *Runtime) Execute(ctx context.Context, functionName string, params []uin
 	gasMeter := gas.NewMeter(gas.GasLimit(r.config.GasLimit))
 
 	// Create host API
-	r.hostAPI = host.NewAPI(gasMeter, kvStore)
+	r.hostAPI = host.NewHostAPI(gasMeter, kvStore, nil, nil)
 
 	// Create execution context
 	execContext := NewExecutionContext()
@@ -447,9 +460,7 @@ func (r *Runtime) Execute(ctx context.Context, functionName string, params []uin
 		WithArgs("accuwasm").
 		WithStdin(nil).
 		WithStdout(nil).
-		WithStderr(nil).
-		// Limit memory
-		WithMemoryLimitPages(r.config.MaxMemoryPages)
+		WithStderr(nil)
 
 	// Instantiate module with host functions
 	module, err := r.wazeroRuntime.InstantiateModule(ctx, r.compiledModule, moduleConfig)
@@ -491,11 +502,9 @@ func (r *Runtime) Execute(ctx context.Context, functionName string, params []uin
 
 	// Create execution receipt
 	receipt := &state.Receipt{
-		Success:      true,
-		GasUsed:      gasUsed,
-		GasLimit:     r.config.GasLimit,
-		FunctionName: functionName,
-		ReturnValue:  returnValue,
+		GasUsed: gasUsed,
+		Events:  []state.Event{}, // TODO: collect events if any
+		L0TxIDs: []string{},      // TODO: populate with actual L0 transaction IDs if any
 	}
 
 	return &ExecutionResult{
@@ -542,4 +551,14 @@ func (r *Runtime) GetMemoryUsage() (uint32, uint32) {
 func (r *Runtime) ValidateModule(ctx context.Context, wasmBytes []byte) error {
 	_, err := r.wazeroRuntime.CompileModule(ctx, wasmBytes)
 	return err
+}
+
+// Stub functions for L0 operations
+
+// NewTokenSendOp creates a new token send operation (stub)
+func NewTokenSendOp(from, to string, amount uint64) (*StagedOp, error) {
+	return &StagedOp{
+		Type: "token_send",
+		Data: []byte(fmt.Sprintf("from:%s,to:%s,amount:%d", from, to, amount)),
+	}, nil
 }

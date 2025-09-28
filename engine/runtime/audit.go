@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"strings"

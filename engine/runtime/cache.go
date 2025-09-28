@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
 )
 
 // PreparedModule contains a validated and compiled WASM module ready for execution

@@ -1,12 +1,11 @@
-package runtime
+package runtime_test
 
 import (
-	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
+	"math/rand"
+	"sort"
 	"testing"
 	"time"
 
@@ -84,6 +83,9 @@ func TestDeterminism(t *testing.T) {
 }
 
 func testDeterministicExecution(t *testing.T, test DeterminismTest) {
+	// Reset random seed for deterministic testing
+	testRand = rand.New(rand.NewSource(12345))
+
 	t.Logf("Testing determinism: %s", test.Description)
 	t.Logf("Running %d iterations with entry point: %s", test.Iterations, test.Entry)
 
@@ -324,9 +326,15 @@ func executeWASMModule(moduleWASM []byte, entry string, args []interface{}) (Exe
 		case float64:
 			hasher.Write([]byte(fmt.Sprintf("%.10f", v)))
 		case map[string]interface{}:
-			for k, val := range v {
+			// Sort keys for deterministic hashing
+			keys := make([]string, 0, len(v))
+			for k := range v {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
 				hasher.Write([]byte(k))
-				hasher.Write([]byte(fmt.Sprintf("%v", val)))
+				hasher.Write([]byte(fmt.Sprintf("%v", v[k])))
 			}
 		}
 	}
@@ -455,9 +463,12 @@ func randomString(minLen, maxLen int) string {
 	return string(result)
 }
 
+// deterministic random source for testing
+var testRand = rand.New(rand.NewSource(12345))
+
 func randomBytes(n int) []byte {
 	bytes := make([]byte, n)
-	rand.Read(bytes)
+	testRand.Read(bytes)
 	return bytes
 }
 
@@ -556,4 +567,72 @@ func createResultSignature(result ExecutionResult) string {
 	hasher.Write([]byte(result.Error))
 
 	return hex.EncodeToString(hasher.Sum(nil)[:8])
+}
+
+// FuzzDeterministicExecution is a proper fuzz test for the execution function
+func FuzzDeterministicExecution(f *testing.F) {
+	// Add seed corpus
+	f.Add("increment", int64(1))
+	f.Add("process_string", int64(42))
+	f.Add("calculate", int64(100))
+
+	f.Fuzz(func(t *testing.T, entry string, value int64) {
+		// Skip invalid entries
+		validEntries := map[string]bool{
+			"increment":      true,
+			"process_string": true,
+			"calculate":      true,
+			"update_state":   true,
+		}
+		if !validEntries[entry] {
+			t.Skip("Invalid entry point")
+		}
+
+		// Generate appropriate module and args based on entry
+		var module []byte
+		var args []interface{}
+
+		switch entry {
+		case "increment":
+			module = generateCounterWASM()
+			args = []interface{}{int(value % 1000)}
+		case "process_string":
+			module = generateStringWASM()
+			args = []interface{}{"fuzz_test", int(value % 256)}
+		case "calculate":
+			module = generateMathWASM()
+			args = []interface{}{float64(value % 1000), 3.14159}
+		case "update_state":
+			module = generateStateWASM()
+			args = []interface{}{map[string]interface{}{"key": "fuzz", "number": int(value % 100)}}
+		}
+
+		// Execute twice with same inputs to verify determinism
+		result1, err1 := executeWASMModule(module, entry, args)
+		if err1 != nil {
+			t.Fatalf("First execution failed: %v", err1)
+		}
+
+		result2, err2 := executeWASMModule(module, entry, args)
+		if err2 != nil {
+			t.Fatalf("Second execution failed: %v", err2)
+		}
+
+		// Verify deterministic results
+		if string(result1.StateRoot) != string(result2.StateRoot) {
+			t.Errorf("Non-deterministic state root: %x vs %x", result1.StateRoot, result2.StateRoot)
+		}
+
+		if result1.GasUsed != result2.GasUsed {
+			t.Errorf("Non-deterministic gas usage: %d vs %d", result1.GasUsed, result2.GasUsed)
+		}
+
+		if len(result1.Events) != len(result2.Events) {
+			t.Errorf("Non-deterministic event count: %d vs %d", len(result1.Events), len(result2.Events))
+		}
+
+		if string(result1.ReturnData) != string(result2.ReturnData) {
+			t.Errorf("Non-deterministic return data: %x vs %x", result1.ReturnData, result2.ReturnData)
+		}
+	})
 }

@@ -10,15 +10,13 @@ import (
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 
-	"github.com/opendlt/accumulate-accumen/bridge/l0api"
-	"github.com/opendlt/accumulate-accumen/bridge/pricing"
 	"github.com/opendlt/accumulate-accumen/engine/gas"
 	"github.com/opendlt/accumulate-accumen/engine/host"
 	"github.com/opendlt/accumulate-accumen/internal/accutil"
 )
 
 // RegisterHostBindings registers all AccuWASM host functions with the given module builder
-func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.API, gasMeter *gas.Meter, execContext *ExecutionContext) error {
+func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.HostAPI, gasMeter *gas.Meter, execContext *ExecutionContext) error {
 	// Core state operations
 	builder.NewFunctionBuilder().
 		WithName("accuwasm_get").
@@ -26,7 +24,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithResultNames("result_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for read operation
-			if !gasMeter.TryConsume(gas.GasCost(100)) {
+			if err := gasMeter.ConsumeGas(100); err != nil {
 				stack[0] = uint64(^uint32(0)) // Return error (-1 as uint32)
 				return
 			}
@@ -46,7 +44,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithParameterNames("key_ptr", "key_len", "value_ptr", "value_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for write operation
-			if !gasMeter.TryConsume(gas.GasCost(200)) {
+			if err := gasMeter.ConsumeGas(200); err != nil {
 				return
 			}
 
@@ -243,7 +241,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithParameterNames("account_ptr", "account_len", "data_ptr", "data_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for L0 operation
-			if !gasMeter.TryConsume(gas.GasCost(1000)) {
+			if err := gasMeter.ConsumeGas(1000); err != nil {
 				return
 			}
 
@@ -272,7 +270,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithParameterNames("from_ptr", "from_len", "to_ptr", "to_len", "amount").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for L0 operation
-			if !gasMeter.TryConsume(gas.GasCost(1500)) {
+			if err := gasMeter.ConsumeGas(1500); err != nil {
 				return
 			}
 
@@ -301,7 +299,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithParameterNames("account_ptr", "account_len", "auth_ptr", "auth_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for L0 operation
-			if !gasMeter.TryConsume(gas.GasCost(800)) {
+			if err := gasMeter.ConsumeGas(800); err != nil {
 				return
 			}
 
@@ -332,7 +330,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithResultNames("credits_needed").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for quote operation
-			if !gasMeter.TryConsume(gas.GasCost(50)) {
+			if err := gasMeter.ConsumeGas(50); err != nil {
 				stack[0] = 0
 				return
 			}
@@ -356,7 +354,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithParameterNames("event_type_ptr", "event_type_len", "event_data_ptr", "event_data_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for event emission
-			if !gasMeter.TryConsume(gas.GasCost(300)) {
+			if err := gasMeter.ConsumeGas(300); err != nil {
 				return
 			}
 
@@ -386,7 +384,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithResultNames("result").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge base gas for L0 query operation
-			if !gasMeter.TryConsume(gas.GasCost(500)) {
+			if err := gasMeter.ConsumeGas(500); err != nil {
 				stack[0] = 1 // Error
 				return
 			}
@@ -434,13 +432,13 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 			if execContext.schedule != nil {
 				gasPerByte := execContext.schedule.PerByte.Read
 				gasCost := uint64(len(jsonBytes)) * gasPerByte
-				if !gasMeter.TryConsume(gas.GasCost(gasCost)) {
+				if err := gasMeter.ConsumeGas(gasCost); err != nil {
 					stack[0] = 1 // Out of gas
 					return
 				}
 			} else {
 				// Fallback gas cost
-				if !gasMeter.TryConsume(gas.GasCost(uint64(len(jsonBytes)))) {
+				if err := gasMeter.ConsumeGas(uint64(len(jsonBytes))); err != nil {
 					stack[0] = 1 // Out of gas
 					return
 				}
@@ -468,7 +466,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithResultNames("result").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge base gas for L0 query operation
-			if !gasMeter.TryConsume(gas.GasCost(300)) {
+			if err := gasMeter.ConsumeGas(300); err != nil {
 				stack[0] = 1 // Error
 				return
 			}
@@ -522,7 +520,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 			if execContext.schedule != nil {
 				gasPerByte := execContext.schedule.PerByte.Read
 				gasCost := uint64(len(balanceBytes)) * gasPerByte
-				if !gasMeter.TryConsume(gas.GasCost(gasCost)) {
+				if err := gasMeter.ConsumeGas(gasCost); err != nil {
 					stack[0] = 1 // Out of gas
 					return
 				}
@@ -550,7 +548,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithResultNames("result").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge base gas for L0 query operation
-			if !gasMeter.TryConsume(gas.GasCost(400)) {
+			if err := gasMeter.ConsumeGas(400); err != nil {
 				stack[0] = 1 // Error
 				return
 			}
@@ -570,7 +568,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 				return
 			}
 
-			keyBytes, ok := memory.Read(keyPtr, keyLen)
+			_, ok = memory.Read(keyPtr, keyLen)
 			if !ok {
 				stack[0] = 1 // Error
 				return
@@ -589,27 +587,30 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 				return
 			}
 
-			entryRecord, err := execContext.querier.QueryDataEntry(ctx, dataURL, string(keyBytes))
+			dataAccount, err := execContext.querier.QueryDataAccount(ctx, dataURL)
 			if err != nil {
 				stack[0] = 1 // Entry not found or other error
 				return
 			}
 
 			var dataBytes []byte
-			if entryRecord != nil && entryRecord.Entry != nil {
-				dataBytes = entryRecord.Entry.GetData()
+			if dataAccount != nil && dataAccount.Entry != nil {
+				entryData := dataAccount.Entry.GetData()
+				if len(entryData) > 0 {
+					dataBytes = entryData[0]
+				}
 			}
 
 			// Charge gas based on bytes read
 			if execContext.schedule != nil {
 				gasPerByte := execContext.schedule.PerByte.Read
 				gasCost := uint64(len(dataBytes)) * gasPerByte
-				if !gasMeter.TryConsume(gas.GasCost(gasCost)) {
+				if err := gasMeter.ConsumeGas(gasCost); err != nil {
 					stack[0] = 1 // Out of gas
 					return
 				}
 			} else {
-				if !gasMeter.TryConsume(gas.GasCost(uint64(len(dataBytes)))) {
+				if err := gasMeter.ConsumeGas(uint64(len(dataBytes))); err != nil {
 					stack[0] = 1 // Out of gas
 					return
 				}
@@ -637,7 +638,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 		WithResultNames("result").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge base gas for calculation
-			if !gasMeter.TryConsume(gas.GasCost(50)) {
+			if err := gasMeter.ConsumeGas(50); err != nil {
 				stack[0] = 1 // Error
 				return
 			}
@@ -689,7 +690,7 @@ func RegisterHostBindings(ctx context.Context, builder wazero.HostModuleBuilder,
 }
 
 // RegisterHostBindingsWithMode registers host functions with execution mode restrictions
-func RegisterHostBindingsWithMode(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.API, gasMeter *gas.Meter, execContext *ExecutionContext, mode ExecMode) error {
+func RegisterHostBindingsWithMode(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.HostAPI, gasMeter *gas.Meter, execContext *ExecutionContext, mode ExecMode) error {
 	// Register all the basic read functions (always available)
 	registerReadOnlyFunctions(ctx, builder, hostAPI, gasMeter)
 
@@ -710,7 +711,7 @@ func RegisterHostBindingsWithMode(ctx context.Context, builder wazero.HostModule
 }
 
 // registerReadOnlyFunctions registers functions that are always safe to call
-func registerReadOnlyFunctions(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.API, gasMeter *gas.Meter) {
+func registerReadOnlyFunctions(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.HostAPI, gasMeter *gas.Meter) {
 	// State read operations
 	builder.NewFunctionBuilder().
 		WithName("accuwasm_get").
@@ -718,7 +719,7 @@ func registerReadOnlyFunctions(ctx context.Context, builder wazero.HostModuleBui
 		WithResultNames("result_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for read operation
-			if !gasMeter.TryConsume(gas.GasCost(100)) {
+			if err := gasMeter.ConsumeGas(100); err != nil {
 				stack[0] = uint64(^uint32(0)) // Return error (-1 as uint32)
 				return
 			}
@@ -905,7 +906,7 @@ func registerReadOnlyFunctions(ctx context.Context, builder wazero.HostModuleBui
 		WithResultNames("credits_needed").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for quote operation
-			if !gasMeter.TryConsume(gas.GasCost(50)) {
+			if err := gasMeter.ConsumeGas(50); err != nil {
 				stack[0] = 0
 				return
 			}
@@ -925,13 +926,13 @@ func registerReadOnlyFunctions(ctx context.Context, builder wazero.HostModuleBui
 }
 
 // registerWriteFunctions registers state mutation functions (Execute mode only)
-func registerWriteFunctions(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.API, gasMeter *gas.Meter) {
+func registerWriteFunctions(ctx context.Context, builder wazero.HostModuleBuilder, hostAPI *host.HostAPI, gasMeter *gas.Meter) {
 	builder.NewFunctionBuilder().
 		WithName("accuwasm_set").
 		WithParameterNames("key_ptr", "key_len", "value_ptr", "value_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for write operation
-			if !gasMeter.TryConsume(gas.GasCost(200)) {
+			if err := gasMeter.ConsumeGas(200); err != nil {
 				return
 			}
 
@@ -963,7 +964,7 @@ func registerL0Functions(ctx context.Context, builder wazero.HostModuleBuilder, 
 		WithParameterNames("account_ptr", "account_len", "data_ptr", "data_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for L0 operation
-			if !gasMeter.TryConsume(gas.GasCost(1000)) {
+			if err := gasMeter.ConsumeGas(1000); err != nil {
 				return
 			}
 
@@ -992,7 +993,7 @@ func registerL0Functions(ctx context.Context, builder wazero.HostModuleBuilder, 
 		WithParameterNames("from_ptr", "from_len", "to_ptr", "to_len", "amount").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for L0 operation
-			if !gasMeter.TryConsume(gas.GasCost(1500)) {
+			if err := gasMeter.ConsumeGas(1500); err != nil {
 				return
 			}
 
@@ -1007,11 +1008,23 @@ func registerL0Functions(ctx context.Context, builder wazero.HostModuleBuilder, 
 			fromBytes, _ := memory.Read(fromPtr, fromLen)
 			toBytes, _ := memory.Read(toPtr, toLen)
 
+			// Parse URLs
+			fromURL, err := url.Parse(string(fromBytes))
+			if err != nil {
+				stack[0] = 1 // Invalid from URL
+				return
+			}
+			toURL, err := url.Parse(string(toBytes))
+			if err != nil {
+				stack[0] = 1 // Invalid to URL
+				return
+			}
+
 			// Stage L0 operation
 			op := &StagedOp{
 				Type:   "send_tokens",
-				From:   string(fromBytes),
-				To:     string(toBytes),
+				From:   fromURL,
+				To:     toURL,
 				Amount: amount,
 			}
 			execContext.stagedOps = append(execContext.stagedOps, op)
@@ -1023,7 +1036,7 @@ func registerL0Functions(ctx context.Context, builder wazero.HostModuleBuilder, 
 		WithParameterNames("account_ptr", "account_len", "auth_ptr", "auth_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for L0 operation
-			if !gasMeter.TryConsume(gas.GasCost(800)) {
+			if err := gasMeter.ConsumeGas(800); err != nil {
 				return
 			}
 
@@ -1055,7 +1068,7 @@ func registerEventFunctions(ctx context.Context, builder wazero.HostModuleBuilde
 		WithParameterNames("event_type_ptr", "event_type_len", "event_data_ptr", "event_data_len").
 		WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, stack []uint64) {
 			// Charge gas for event emission
-			if !gasMeter.TryConsume(gas.GasCost(300)) {
+			if err := gasMeter.ConsumeGas(300); err != nil {
 				return
 			}
 
