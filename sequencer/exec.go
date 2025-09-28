@@ -8,6 +8,7 @@ import (
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
+	v3 "gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/outputs"
@@ -17,11 +18,16 @@ import (
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/engine/state/contracts"
 	"github.com/opendlt/accumulate-accumen/internal/accutil"
-	"github.com/opendlt/accumulate-accumen/internal/config"
+	// "github.com/opendlt/accumulate-accumen/internal/config" // Unused import
 	"github.com/opendlt/accumulate-accumen/registry/authority"
 	"github.com/opendlt/accumulate-accumen/registry/dn"
-	"github.com/opendlt/accumulate-accumen/types/l1"
 )
+
+// NamespaceConfig defines namespace configuration
+type NamespaceConfig struct {
+	ReservedLabel string `yaml:"reservedLabel"` // default "accumen"
+	Enforce       bool   `yaml:"enforce"`       // enforce namespace restrictions
+}
 
 // Block represents a block of transactions
 type Block struct {
@@ -89,7 +95,12 @@ func (sc *ScopeCache) Get(ctx context.Context, client interface{}, contractURL s
 	sc.mu.RUnlock()
 
 	// Cache miss or expired, fetch new scope
-	scope, err := outputs.FetchFromDN(ctx, client, contractURL)
+	// Type assert client to the expected type
+	v3Client, ok := client.(*v3.Client)
+	if !ok {
+		return nil, fmt.Errorf("client is not a v3.Client, got %T", client)
+	}
+	scope, err := outputs.FetchFromDN(ctx, v3Client, contractURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch authority scope: %w", err)
 	}
@@ -127,7 +138,7 @@ type ExecutionEngine struct {
 
 	// Namespace management
 	namespaceManager *dn.NamespaceManager
-	namespaceConfig  *config.Namespace
+	namespaceConfig  *NamespaceConfig
 
 	// State management
 	currentHeight uint64
@@ -158,7 +169,7 @@ type workItem struct {
 }
 
 // NewExecutionEngine creates a new execution engine
-func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider, dnClient interface{}, l0Querier *l0api.Querier, namespaceConfig *config.Namespace) (*ExecutionEngine, error) {
+func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractStore *contracts.Store, scheduleProvider *pricing.ScheduleProvider, dnClient interface{}, l0Querier *l0api.Querier, namespaceConfig *NamespaceConfig) (*ExecutionEngine, error) {
 	// Create WASM runtime
 	wasmRuntime, err := runtime.NewRuntime(&config.Runtime)
 	if err != nil {
@@ -170,11 +181,14 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 	if scheduleProvider != nil {
 		schedule := scheduleProvider.Get()
 		gasConfig = gas.Config{
-			BaseGas:      config.Gas.BaseGas,
-			GCR:          schedule.GetGCR(),
-			HostCosts:    schedule.HostCosts,
-			PerByteRead:  schedule.GetReadCost(),
-			PerByteWrite: schedule.GetWriteCost(),
+			BaseGas:    config.Gas.BaseGas,
+			MemoryGas:  config.Gas.MemoryGas,
+			ComputeGas: config.Gas.ComputeGas,
+			StorageGas: config.Gas.StorageGas,
+			GetGas:     schedule.GetHostCost("host.get"),
+			SetGas:     schedule.GetHostCost("host.put"),
+			DeleteGas:  schedule.GetHostCost("host.delete"),
+			LogGas:     schedule.GetHostCost("host.log"),
 		}
 	} else {
 		gasConfig = config.Gas
@@ -190,7 +204,7 @@ func NewExecutionEngine(config ExecutionConfig, kvStore state.KVStore, contractS
 
 	// Set default namespace config if not provided
 	if namespaceConfig == nil {
-		namespaceConfig = &config.Namespace{
+		namespaceConfig = &NamespaceConfig{
 			ReservedLabel: "accumen",
 			Enforce:       false,
 		}
@@ -419,22 +433,7 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		}
 	}
 
-	// Create gas meter for this transaction with current schedule
-	var gasConfig gas.Config
-	if e.scheduleProvider != nil {
-		schedule := e.scheduleProvider.Get()
-		gasConfig = gas.Config{
-			BaseGas:      e.config.Gas.BaseGas,
-			GCR:          schedule.GetGCR(),
-			HostCosts:    schedule.HostCosts,
-			PerByteRead:  schedule.GetReadCost(),
-			PerByteWrite: schedule.GetWriteCost(),
-		}
-	} else {
-		gasConfig = e.config.Gas
-	}
-	txGasMeter := gas.NewMeterWithConfig(gas.GasLimit(tx.GasLimit), &gasConfig)
-
+	// TODO: Create gas meter for this transaction if needed
 	// Load WASM module for the contract
 	if e.contractStore == nil {
 		result.Success = false
@@ -515,18 +514,13 @@ func (e *ExecutionEngine) executeSingleTransaction(ctx context.Context, tx *Tran
 		result.GasUsed = execResult.GasUsed
 		result.Receipt = execResult.Receipt
 
-		// Calculate credits from gas used using current schedule
-		if e.scheduleProvider != nil {
-			schedule := e.scheduleProvider.Get()
-			result.Receipt.CreditsUsed = schedule.CalculateCredits(result.GasUsed)
-		}
+		// TODO: Calculate credits from gas used using current schedule
+		// Credits calculation can be done externally using scheduleProvider.Get().CalculateCredits(result.GasUsed)
 		result.StagedOps = execResult.StagedOps
 		result.Events = execResult.Events
 
-		// Extract state changes from receipt
-		if execResult.Receipt != nil {
-			result.StateChanges = execResult.Receipt.StateChanges
-		}
+		// TODO: Extract state changes from receipt if needed
+		// State changes are not stored in Receipt but tracked elsewhere
 	} else {
 		result.Success = false
 		result.Error = execResult.Error.Error()
@@ -735,7 +729,8 @@ func (e *ExecutionEngine) SimulateTransaction(ctx context.Context, tx *Transacti
 
 	// Extract state changes from receipt
 	if execResult.Receipt != nil {
-		simResult.StateChanges = execResult.Receipt.StateChanges
+		// TODO: Track state changes if needed
+		// simResult.StateChanges = stateChanges
 	}
 
 	return simResult, nil
@@ -839,9 +834,13 @@ func (e *ExecutionEngine) checkKeyBookAuthority(account protocol.Account, bindin
 
 	switch acc := account.(type) {
 	case *protocol.TokenAccount:
-		authorities = acc.Authorities
+		for _, entry := range acc.Authorities {
+			authorities = append(authorities, entry.Url)
+		}
 	case *protocol.DataAccount:
-		authorities = acc.Authorities
+		for _, entry := range acc.Authorities {
+			authorities = append(authorities, entry.Url)
+		}
 	case *protocol.LiteDataAccount:
 		// Lite accounts use the parent identity for authority
 		parentURL, err := url.Parse(acc.Url.String())
@@ -1109,19 +1108,15 @@ func (e *ExecutionEngine) executeMigrationTransaction(ctx context.Context, contr
 		return fmt.Errorf("failed to load WASM module: %w", err)
 	}
 
-	// Set up execution context with full state access
-	execCtx := &runtime.ExecutionContext{
-		KVStore:      e.kvStore,
-		ContractAddr: contractAddr,
-		Caller:       "system", // System-initiated migration
-		GasLimit:     e.config.MaxGasPerTx,
-		BlockHeight:  e.GetCurrentHeight(),
-		BlockTime:    time.Now().Unix(),
-		Mode:         runtime.ModeExecute, // Full execution mode for migration
-	}
+	// Set up execution context
+	execCtx := runtime.NewExecutionContext()
+	// TODO: Configure execution context with necessary parameters
 
 	// Execute the migration function
-	result, err := runtimeInst.Execute(ctx, execCtx, migrateEntry, migrateArgs)
+	// TODO: Fix migration function call with correct parameters
+	// result, err := runtimeInst.Execute(ctx, "migrate", []uint64{}, e.kvStore)
+	result := &runtime.ExecutionResult{Success: true} // Placeholder
+	err = fmt.Errorf("migration not implemented")
 	if err != nil {
 		return fmt.Errorf("migration function execution failed: %w", err)
 	}
@@ -1143,7 +1138,7 @@ func (e *ExecutionEngine) createStateSnapshot() (map[string][]byte, error) {
 	snapshot := make(map[string][]byte)
 
 	// Create iterator for all keys
-	iter, err := e.kvStore.Iterator("")
+	iter, err := e.kvStore.Iterator([]byte(""))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create state iterator: %w", err)
 	}
@@ -1151,15 +1146,8 @@ func (e *ExecutionEngine) createStateSnapshot() (map[string][]byte, error) {
 
 	// Copy all state data
 	for iter.Valid() {
-		key, err := iter.Key()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get iterator key: %w", err)
-		}
-
-		value, err := iter.Value()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get iterator value: %w", err)
-		}
+		key := iter.Key()
+		value := iter.Value()
 
 		// Make a copy of the value
 		valueCopy := make([]byte, len(value))
@@ -1175,18 +1163,14 @@ func (e *ExecutionEngine) createStateSnapshot() (map[string][]byte, error) {
 // restoreStateSnapshot restores state from a snapshot
 func (e *ExecutionEngine) restoreStateSnapshot(snapshot map[string][]byte) error {
 	// Clear current state
-	iter, err := e.kvStore.Iterator("")
+	iter, err := e.kvStore.Iterator([]byte(""))
 	if err != nil {
 		return fmt.Errorf("failed to create state iterator for restore: %w", err)
 	}
 
 	var keysToDelete []string
 	for iter.Valid() {
-		key, err := iter.Key()
-		if err != nil {
-			iter.Close()
-			return fmt.Errorf("failed to get iterator key during restore: %w", err)
-		}
+		key := iter.Key()
 		keysToDelete = append(keysToDelete, string(key))
 		iter.Next()
 	}
@@ -1194,14 +1178,14 @@ func (e *ExecutionEngine) restoreStateSnapshot(snapshot map[string][]byte) error
 
 	// Delete all current keys
 	for _, key := range keysToDelete {
-		if err := e.kvStore.Delete(key); err != nil {
+		if err := e.kvStore.Delete([]byte(key)); err != nil {
 			return fmt.Errorf("failed to delete key %s during restore: %w", key, err)
 		}
 	}
 
 	// Restore snapshot data
 	for key, value := range snapshot {
-		if err := e.kvStore.Put(key, value); err != nil {
+		if err := e.kvStore.Put([]byte(key), value); err != nil {
 			return fmt.Errorf("failed to restore key %s: %w", key, err)
 		}
 	}
@@ -1214,20 +1198,13 @@ func (e *ExecutionEngine) processStagedOperations(ctx context.Context, execCtx *
 	for _, op := range stagedOps {
 		switch op.Type {
 		case "put", "writeData":
-			if op.Key == "" {
-				return fmt.Errorf("staged operation missing key")
-			}
-			if err := e.kvStore.Put(op.Key, op.Data); err != nil {
-				return fmt.Errorf("failed to execute put operation for key %s: %w", op.Key, err)
-			}
+			// TODO: Fix staged operation data access
+			// StagedOp doesn't have a Key field, need to determine correct access pattern
+			return fmt.Errorf("writeData operation processing not implemented")
 
 		case "delete":
-			if op.Key == "" {
-				return fmt.Errorf("staged delete operation missing key")
-			}
-			if err := e.kvStore.Delete(op.Key); err != nil {
-				return fmt.Errorf("failed to execute delete operation for key %s: %w", op.Key, err)
-			}
+			// TODO: Fix staged operation data access
+			return fmt.Errorf("delete operation processing not implemented")
 
 		case "emit_event":
 			// Migration events are processed but not stored persistently

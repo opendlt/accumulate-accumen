@@ -3,19 +3,19 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"math"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
-	"github.com/opendlt/accumulate-accumen/types/l1"
 )
 
 var (
@@ -80,10 +80,7 @@ func main() {
 	logger.Info("  Workers: %d", *workers)
 
 	// Create RPC client
-	client, err := rpc.NewClient(*rpcAddr)
-	if err != nil {
-		log.Fatalf("Failed to create RPC client: %v", err)
-	}
+	client := rpc.NewClient(*rpcAddr)
 
 	// Create stress tester
 	tester := &StressTester{
@@ -122,8 +119,8 @@ func (st *StressTester) deployTestContracts(count int) error {
 
 		// Deploy contract
 		req := &rpc.DeployRequest{
-			Address: contractAddr,
-			WASM:    contractWASM,
+			Addr:    contractAddr,
+			WasmB64: base64.StdEncoding.EncodeToString(contractWASM),
 		}
 
 		resp, err := st.rpcClient.Deploy(context.Background(), req)
@@ -131,8 +128,8 @@ func (st *StressTester) deployTestContracts(count int) error {
 			return fmt.Errorf("failed to deploy contract %d: %w", i, err)
 		}
 
-		if !resp.Success {
-			return fmt.Errorf("contract deployment %d failed: %s", i, resp.Error)
+		if resp.WasmHash == "" {
+			return fmt.Errorf("contract deployment %d failed: empty hash", i)
 		}
 
 		st.contracts = append(st.contracts, contractAddr)
@@ -257,12 +254,12 @@ func (st *StressTester) executeTransaction() {
 		Error:   err,
 	}
 
-	if err == nil && resp.Success {
+	if err == nil && (resp.Error == nil || *resp.Error == "") {
 		result.TxHash = resp.TxHash
 		atomic.AddInt64(&st.txCounter, 1)
 	} else {
 		if err == nil {
-			result.Error = fmt.Errorf("transaction failed: %s", resp.Error)
+			result.Error = fmt.Errorf("transaction failed: %s", *resp.Error)
 		}
 	}
 
@@ -360,7 +357,7 @@ func (st *StressTester) analyzeResults(results []TxResult, duration time.Duratio
 
 func printResults(result *StressTestResult, logger *logz.Logger) {
 	logger.Info("📊 Stress Test Results")
-	logger.Info("=" * 50)
+	logger.Info(strings.Repeat("=", 50))
 	logger.Info("Test Configuration:")
 	logger.Info("  Duration: %v", result.TestDuration)
 	logger.Info("  Contracts: %d", result.ContractsUsed)

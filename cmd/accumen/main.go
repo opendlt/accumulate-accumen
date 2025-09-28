@@ -25,8 +25,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 	"github.com/opendlt/accumulate-accumen/types/l1"
-
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
+	v3 "gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
 var (
@@ -133,10 +132,7 @@ func main() {
 	logz.Info("Connected to Accumulate API v3 endpoint: %s", initialEndpoint)
 
 	// Create API v3 client for compatibility using endpoint manager
-	apiClient, err := v3.New(initialEndpoint)
-	if err != nil {
-		logz.Fatal("Failed to create API v3 client: %v", err)
-	}
+	apiClient := v3.NewClient(initialEndpoint)
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -347,7 +343,8 @@ func runSequencer(ctx context.Context, cfg *config.Config, apiClient *v3.Client,
 			Mempool:       mempool,
 		})
 
-		if err := rpcServer.Start(*rpcAddr); err != nil {
+		// TODO: Configure server address properly
+		if err := rpcServer.Start(); err != nil {
 			logger.Info("Warning: Failed to start RPC server: %v", err)
 		} else {
 			logger.Info("RPC server started on %s", *rpcAddr)
@@ -404,7 +401,7 @@ func runFollower(ctx context.Context, cfg *config.Config, apiClient *v3.Client, 
 	var rpcServer *rpc.Server
 	if *rpcAddr != "" {
 		// Create a simple KV store for queries (in follower mode, this would sync from sequencer)
-		kvStore := state.NewMemoryKVStore()
+		// kvStore := state.NewMemoryKVStore() // TODO: Use when RPC server is implemented
 
 		// For followers, we don't have a sequencer, so we'll need to modify the RPC server
 		// For now, we'll skip RPC server for followers

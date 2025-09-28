@@ -17,8 +17,7 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/logz"
 	"github.com/opendlt/accumulate-accumen/internal/metrics"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
-
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
+	v3 "gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
 var (
@@ -61,10 +60,7 @@ func main() {
 	go startMetricsServer(*metricsAddr)
 
 	// Create API v3 client
-	apiClient, err := v3.New(cfg.APIV3Endpoints[0]) // Use first endpoint for now
-	if err != nil {
-		logz.Fatal("Failed to create API v3 client: %v", err)
-	}
+	apiClient := v3.NewClient(cfg.APIV3Endpoints[0]) // Use first endpoint for now
 	logz.Info("Connected to Accumulate API v3 endpoint: %s", cfg.APIV3Endpoints[0])
 
 	// Setup signal handling
@@ -167,7 +163,7 @@ func runFollower(ctx context.Context, cfg *config.Config, apiClient *v3.Client) 
 			Indexer: idx,
 		})
 
-		if err := rpcServer.Start(*rpcAddr); err != nil {
+		if err := rpcServer.Start(); err != nil {
 			logger.Info("Warning: Failed to start RPC server: %v", err)
 		} else {
 			logger.Info("Read-only RPC server started on %s", *rpcAddr)

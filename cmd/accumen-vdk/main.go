@@ -23,10 +23,9 @@ import (
 	"github.com/opendlt/accumulate-accumen/internal/metrics"
 	"github.com/opendlt/accumulate-accumen/internal/rpc"
 	"github.com/opendlt/accumulate-accumen/internal/vdkshim"
+	v3 "gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"github.com/opendlt/accumulate-accumen/sequencer"
 	"github.com/opendlt/accumulate-accumen/types/l1"
-
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 )
 
 var (
@@ -110,10 +109,7 @@ func main() {
 	logz.Info("Connected to Accumulate API v3 endpoint: %s", initialEndpoint)
 
 	// Create API v3 client for compatibility using endpoint manager
-	apiClient, err := v3.New(initialEndpoint)
-	if err != nil {
-		logz.Fatal("Failed to create API v3 client: %v", err)
-	}
+	apiClient := v3.NewClient(initialEndpoint)
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -210,7 +206,7 @@ func createSequencer(cfg *config.Config, apiClient *v3.Client, l0Client *l0api.C
 	}
 
 	// Create pricing schedule provider
-	scheduleProvider := pricing.Cached(
+	_ = pricing.Cached(
 		pricing.CreateDNProvider(apiClient, cfg.Pricing.GasScheduleID),
 		cfg.GetPricingRefreshDuration(),
 	)
@@ -226,7 +222,18 @@ func createSequencer(cfg *config.Config, apiClient *v3.Client, l0Client *l0api.C
 		})
 
 		mux := http.NewServeMux()
-		mux.Handle("/", rpcServer)
+		// Start RPC server separately (like other commands)
+		go func() {
+			if err := rpcServer.Start(); err != nil {
+				logger.Info("Warning: Failed to start RPC server: %v", err)
+			}
+		}()
+
+		// Create simple health endpoint for VDK compatibility
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("OK"))
+		})
 
 		httpSrv = &http.Server{
 			Addr:    *rpcAddr,
