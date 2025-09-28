@@ -144,6 +144,9 @@ type Request struct {
 	Params interface{} `json:"params,omitempty"`
 }
 
+// RPCRequest is an alias for Request for backward compatibility
+type RPCRequest = Request
+
 // Response represents a JSON-RPC response
 type Response struct {
 	ID     interface{} `json:"id"`
@@ -161,6 +164,7 @@ type RPCError struct {
 type StatusResult struct {
 	ChainID        string  `json:"chainId"`
 	Height         uint64  `json:"height"`
+	LastAnchor     *string `json:"lastAnchor"`     // For compatibility
 	LastAnchorTime *string `json:"lastAnchorTime"`
 	BlockTime      string  `json:"blockTime"`
 	Running        bool    `json:"running"`
@@ -188,7 +192,10 @@ type SubmitTxParams struct {
 
 // SubmitTxResult represents the result of accumen.submitTx()
 type SubmitTxResult struct {
-	TxHash string `json:"txHash"` // L1 transaction hash (32-byte SHA256)
+	TxHash      string  `json:"txHash"`      // L1 transaction hash (32-byte SHA256)
+	Status      string  `json:"status"`      // Transaction status
+	BlockHeight uint64  `json:"blockHeight"` // Block height where transaction was included
+	Error       *string `json:"error"`       // Error message if any
 }
 
 // QueryParams represents parameters for accumen.query()
@@ -225,6 +232,9 @@ type DeployContractParams struct {
 type DeployContractResult struct {
 	WasmHash string `json:"wasm_hash"`
 }
+
+// DeployResult is an alias for DeployContractResult for backward compatibility
+type DeployResult = DeployContractResult
 
 // UpgradeContractParams represents parameters for accumen.upgradeContract()
 type UpgradeContractParams struct {
@@ -1439,9 +1449,12 @@ func (s *Server) GetStats() *ServerStats {
 	s.stats.mu.RLock()
 	defer s.stats.mu.RUnlock()
 
-	statsCopy := *s.stats
-	statsCopy.Uptime = time.Since(s.stats.StartTime)
-	return &statsCopy
+	return &ServerStats{
+		RequestCount: s.stats.RequestCount,
+		ErrorCount:   s.stats.ErrorCount,
+		StartTime:    s.stats.StartTime,
+		Uptime:       time.Since(s.stats.StartTime),
+	}
 }
 
 // handleSimulate handles accumen.simulate() method
@@ -1491,7 +1504,7 @@ func (s *Server) handleSimulate(params interface{}) (interface{}, *RPCError) {
 	}
 
 	// Calculate ACME cost from gas used
-	credits, acmeDecimal := pricing.QuoteForGas(simResult.GasUsed)
+	_, acmeDecimal := pricing.QuoteForGas(simResult.GasUsed)
 
 	// Build response
 	result := &SimulateResult{
@@ -1506,3 +1519,33 @@ func (s *Server) handleSimulate(params interface{}) (interface{}, *RPCError) {
 
 	return result, nil
 }
+
+// Client types for backward compatibility
+
+// Client represents an RPC client
+type Client struct {
+	serverURL string
+}
+
+// NewClient creates a new RPC client
+func NewClient(serverURL string) *Client {
+	return &Client{serverURL: serverURL}
+}
+
+// Deploy deploys a contract (stub implementation)
+func (c *Client) Deploy(ctx context.Context, req *DeployRequest) (*DeployContractResult, error) {
+	// TODO: Implement actual HTTP client
+	return nil, fmt.Errorf("RPC client not implemented")
+}
+
+// Submit submits a transaction (stub implementation)
+func (c *Client) Submit(ctx context.Context, req *SubmitRequest) (*SubmitTxResult, error) {
+	// TODO: Implement actual HTTP client
+	return nil, fmt.Errorf("RPC client not implemented")
+}
+
+// DeployRequest is an alias for DeployContractParams for backward compatibility
+type DeployRequest = DeployContractParams
+
+// SubmitRequest is an alias for SubmitTxParams for backward compatibility
+type SubmitRequest = SubmitTxParams

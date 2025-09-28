@@ -63,15 +63,20 @@ func (nm *NamespaceManager) IsReservedNamespace(ctx context.Context, namespace s
 		return false, nil
 	}
 
-	// Get the latest entry from the data account
-	if len(dataAccount.Entry) == 0 {
+	// Get the entry from the data account (now a single entry, not a slice)
+	if dataAccount.Entry == nil {
 		// No reserved namespaces configured
 		return false, nil
 	}
 
-	// Parse the reserved namespaces from the latest entry
-	latestEntry := dataAccount.Entry[len(dataAccount.Entry)-1]
-	reservedNamespaces := strings.Split(string(latestEntry.Data), "\n")
+	// Get data from the entry using GetData() method
+	entryData := dataAccount.Entry.GetData()
+	if len(entryData) == 0 {
+		return false, nil
+	}
+
+	// Parse the reserved namespaces from the entry data
+	reservedNamespaces := strings.Split(string(entryData[0]), "\n")
 
 	// Check if the namespace is in the reserved list
 	for _, reserved := range reservedNamespaces {
@@ -148,13 +153,18 @@ func (nm *NamespaceManager) checkContractRegistry(ctx context.Context, contractU
 	}
 
 	// Check if there are any entries (authorization records)
-	if len(dataAccount.Entry) == 0 {
+	if dataAccount.Entry == nil {
 		return false, "no authorization records found", nil
 	}
 
-	// Get the latest authorization entry
-	latestEntry := dataAccount.Entry[len(dataAccount.Entry)-1]
-	authData := string(latestEntry.Data)
+	// Get data from the entry using GetData() method
+	entryData := dataAccount.Entry.GetData()
+	if len(entryData) == 0 {
+		return false, "no authorization records found", nil
+	}
+
+	// Get the authorization data
+	authData := string(entryData[0])
 
 	// Parse the authorization data
 	// Expected format: "status:authorized" or "status:denied"
@@ -202,7 +212,7 @@ func (nm *NamespaceManager) GetContractAuthorization(ctx context.Context, contra
 		}, nil
 	}
 
-	if len(dataAccount.Entry) == 0 {
+	if dataAccount.Entry == nil {
 		return &ContractAuthorization{
 			ContractURL: contractURL,
 			Status:      "not_found",
@@ -210,9 +220,18 @@ func (nm *NamespaceManager) GetContractAuthorization(ctx context.Context, contra
 		}, nil
 	}
 
-	// Parse the latest authorization entry
-	latestEntry := dataAccount.Entry[len(dataAccount.Entry)-1]
-	authData := string(latestEntry.Data)
+	// Get data from the entry using GetData() method
+	entryData := dataAccount.Entry.GetData()
+	if len(entryData) == 0 {
+		return &ContractAuthorization{
+			ContractURL: contractURL,
+			Status:      "not_found",
+			Reason:      "no authorization records found",
+		}, nil
+	}
+
+	// Parse the authorization entry data
+	authData := string(entryData[0])
 
 	auth := &ContractAuthorization{
 		ContractURL: contractURL,
@@ -264,13 +283,18 @@ func (nm *NamespaceManager) ListReservedNamespaces(ctx context.Context) ([]strin
 		return []string{}, nil // Return empty list if not found
 	}
 
-	if len(dataAccount.Entry) == 0 {
+	if dataAccount.Entry == nil {
 		return []string{}, nil
 	}
 
-	// Parse the reserved namespaces from the latest entry
-	latestEntry := dataAccount.Entry[len(dataAccount.Entry)-1]
-	reservedNamespaces := strings.Split(string(latestEntry.Data), "\n")
+	// Get data from the entry using GetData() method
+	entryData := dataAccount.Entry.GetData()
+	if len(entryData) == 0 {
+		return []string{}, nil
+	}
+
+	// Parse the reserved namespaces from the entry data
+	reservedNamespaces := strings.Split(string(entryData[0]), "\n")
 
 	// Filter out empty lines and trim whitespace
 	var filteredNamespaces []string

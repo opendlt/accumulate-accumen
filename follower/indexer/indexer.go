@@ -10,7 +10,7 @@ import (
 
 	"github.com/opendlt/accumulate-accumen/engine/state"
 	"github.com/opendlt/accumulate-accumen/internal/logz"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3/jsonrpc"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 )
 
@@ -18,7 +18,7 @@ import (
 type Indexer struct {
 	mu      sync.RWMutex
 	config  *Config
-	client  *api.Client
+	client  *jsonrpc.Client
 	kvStore state.KVStore
 	logger  *logz.Logger
 
@@ -39,7 +39,7 @@ type Indexer struct {
 
 // Config defines configuration for the indexer
 type Config struct {
-	APIClient    *api.Client
+	APIClient    *jsonrpc.Client
 	KVStore      state.KVStore
 	MetadataPath string        // DN path for transaction metadata
 	AnchorsPath  string        // DN path for anchors
@@ -448,7 +448,7 @@ func (idx *Indexer) scanDNDataAccount(ctx context.Context, dnURL *url.URL, fromK
 func (idx *Indexer) queryDataAccountEntries(ctx context.Context, dnURL *url.URL, fromKey string, limit int) ([]*DNEntry, error) {
 	// For now, return empty results since this requires actual DN integration
 	// In real implementation, this would:
-	// 1. Use api.Client.QueryDirectory to list data entries under dnURL
+	// 1. Use jsonrpc.Client.QueryDirectory to list data entries under dnURL
 	// 2. For each entry, query both the data and the WriteData transaction that created it
 	// 3. Parse the transaction header to extract memo and metadata
 
@@ -457,24 +457,11 @@ func (idx *Indexer) queryDataAccountEntries(ctx context.Context, dnURL *url.URL,
 }
 
 // parseL1InfoFromTxHeader extracts L1 hash and contract info from WriteData transaction header
+// TODO: Fix for current Accumulate API - transaction query response types have changed
 func (idx *Indexer) parseL1InfoFromTxHeader(txHeader *interface{} /* TODO: fix api.TransactionQueryResponse for current API */) (l1Hash, contract, entryMethod string) {
-	if txHeader == nil || txHeader.Transaction == nil {
-		return "", "", ""
-	}
-
-	tx := txHeader.Transaction
-
-	// Parse memo for L1 hash using accutil.WithCrossLink format
-	if tx.Header != nil && tx.Header.Memo != "" {
-		l1Hash = idx.parseL1HashFromMemo(tx.Header.Memo)
-	}
-
-	// Parse metadata for contract and entry info
-	if tx.Header != nil && len(tx.Header.Metadata) > 0 {
-		contract, entryMethod = idx.parseContractInfoFromMetadata(tx.Header.Metadata)
-	}
-
-	return l1Hash, contract, entryMethod
+	// Stubbed implementation until API types are properly mapped
+	idx.logger.Debug("parseL1InfoFromTxHeader: stubbed implementation, API types need updating")
+	return "", "", ""
 }
 
 // parseL1HashFromMemo extracts L1 hash from memo using accutil.WithCrossLink format

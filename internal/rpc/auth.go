@@ -370,13 +370,6 @@ func writeAuthError(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 
-	response := map[string]interface{}{
-		"error": map[string]interface{}{
-			"code":    -32401,
-			"message": "Unauthorized: " + message,
-		},
-	}
-
 	// Write JSON response (simplified - in production use proper JSON encoding)
 	fmt.Fprintf(w, `{"error":{"code":-32401,"message":"Unauthorized: %s"}}`, message)
 }
