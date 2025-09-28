@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package accumen;
+package accumen.block;
 
-option go_package = "github.com/opendlt/accumulate-accumen/types/proto/accumen";
+option go_package = "github.com/opendlt/accumulate-accumen/types/proto/accumen/block";
 
 // TxResult represents the result of executing a transaction
 message TxResult {

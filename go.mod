@@ -2,6 +2,8 @@ module github.com/opendlt/accumulate-accumen
 
 go 1.22.1
 
+replace gitlab.com/accumulatenetwork/accumulate v1.4.0 => ./patches/accumulate
+
 require (
 	github.com/dgraph-io/badger/v3 v3.2103.5
 	github.com/dgraph-io/badger/v4 v4.2.0
