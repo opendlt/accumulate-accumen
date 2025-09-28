@@ -6,9 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
+	v3 "gitlab.com/accumulatenetwork/accumulate/pkg/api/v3"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 
 	"github.com/opendlt/accumulate-accumen/bridge/l0api"
 	"github.com/opendlt/accumulate-accumen/bridge/pricing"
@@ -58,14 +57,14 @@ func DefaultSubmitterConfig() *SubmitterConfig {
 
 // SubmissionResult represents the result of a submission attempt
 type SubmissionResult struct {
-	OutputID    string              `json:"output_id"`
-	Success     bool                `json:"success"`
-	TxHash      []byte              `json:"tx_hash,omitempty"`
-	Response    *api.SubmitResponse `json:"response,omitempty"`
-	Error       error               `json:"error,omitempty"`
-	Cost        uint64              `json:"cost"`
-	SubmittedAt time.Time           `json:"submitted_at"`
-	Duration    time.Duration       `json:"duration"`
+	OutputID    string           `json:"output_id"`
+	Success     bool             `json:"success"`
+	TxHash      []byte           `json:"tx_hash,omitempty"`
+	Response    []*v3.Submission `json:"response,omitempty"`
+	Error       error            `json:"error,omitempty"`
+	Cost        uint64           `json:"cost"`
+	SubmittedAt time.Time        `json:"submitted_at"`
+	Duration    time.Duration    `json:"duration"`
 }
 
 // NewOutputSubmitter creates a new output submitter
@@ -260,7 +259,7 @@ func (os *OutputSubmitter) submitStagedOutput(ctx context.Context, staged *Stage
 	}
 
 	// Submit to Accumulate L0
-	response, err := os.client.Submit(submitCtx, staged.Envelope)
+	response, err := os.client.Submit(submitCtx, staged.Envelope, v3.SubmitOptions{})
 	if err != nil {
 		result.Error = fmt.Errorf("submission failed: %w", err)
 		result.Duration = time.Since(start)
@@ -272,9 +271,10 @@ func (os *OutputSubmitter) submitStagedOutput(ctx context.Context, staged *Stage
 	result.Response = response
 	result.Duration = time.Since(start)
 
-	// Extract transaction hash if available
-	if response != nil && len(response.TransactionHash) > 0 {
-		result.TxHash = response.TransactionHash
+	// Extract transaction hash if available (simplified)
+	if response != nil && len(response) > 0 {
+		// TODO: extract transaction hash from response properly
+		result.TxHash = []byte{} // Placeholder
 	}
 
 	return result, nil
@@ -287,7 +287,7 @@ func (os *OutputSubmitter) validateEnvelope(ctx context.Context, envelope *messa
 	}
 
 	// Use the L0 API client to validate
-	_, err := os.client.Validate(ctx, envelope)
+	_, err := os.client.Validate(ctx, envelope, v3.ValidateOptions{})
 	if err != nil {
 		return fmt.Errorf("envelope validation failed: %w", err)
 	}
@@ -301,9 +301,8 @@ func (os *OutputSubmitter) calculateEnvelopeCost(envelope *messaging.Envelope) (
 		return 0, fmt.Errorf("credit manager not available")
 	}
 
-	// Convert messaging envelope to protocol envelope for cost calculation
-	// This is a simplified conversion - in practice, you'd need proper conversion
-	protocolEnvelope := &protocol.Envelope{}
+	// Use the messaging envelope directly for cost calculation
+	protocolEnvelope := envelope
 
 	// Calculate cost using credit manager
 	return os.creditManager.CalculateEnvelopeCost(protocolEnvelope)

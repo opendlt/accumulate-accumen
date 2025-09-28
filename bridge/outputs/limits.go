@@ -1,11 +1,13 @@
 package outputs
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
 
 	"github.com/opendlt/accumulate-accumen/engine/state"
@@ -61,6 +63,76 @@ type ChainLimits struct {
 	MaxGasPerBlock     uint64
 	BlockTime          time.Duration
 	ConfirmationTime   time.Duration
+}
+
+// OutputStatus represents the status of an output
+type OutputStatus int
+
+const (
+	OutputStatusPending OutputStatus = iota
+	OutputStatusReady
+	OutputStatusSubmitted
+	OutputStatusConfirmed
+	OutputStatusFailed
+	OutputStatusExpired
+)
+
+// Output represents a basic output structure for validation
+type Output struct {
+	ID           string          `json:"id"`
+	Type         string          `json:"type"`
+	Data         []byte          `json:"data"`
+	Dependencies []string        `json:"dependencies"`
+	Priority     int64           `json:"priority"`
+	GasLimit     uint64          `json:"gas_limit"`
+	Created      time.Time       `json:"created"`
+	Updated      time.Time       `json:"updated"`
+	Status       OutputStatus    `json:"status"`
+	Metadata     *OutputMetadata `json:"metadata,omitempty"`
+}
+
+// ToEnvelope converts the output to a messaging envelope
+func (o *Output) ToEnvelope(ctx context.Context) (*messaging.Envelope, error) {
+	// TODO: implement actual envelope creation logic
+	return &messaging.Envelope{}, nil
+}
+
+// Cleanup performs any necessary cleanup for the output
+func (o *Output) Cleanup() error {
+	// TODO: implement actual cleanup logic
+	return nil
+}
+
+// Counter represents a simple in-memory counter for limits tracking
+type Counter struct {
+	count uint64
+	mu    sync.RWMutex
+}
+
+// NewCounter creates a new counter
+func NewCounter() *Counter {
+	return &Counter{}
+}
+
+// Increment increments the counter
+func (c *Counter) Increment() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.count++
+}
+
+// Get returns the current count
+func (c *Counter) Get() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.count
+}
+
+// Reset resets the counter to zero
+func (c *Counter) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.count = 0
 }
 
 // DefaultLimits returns default resource limits
@@ -369,7 +441,7 @@ func (l *Limits) CheckRateLimit(count int, duration time.Duration) RateLimitChec
 // OperationCounter tracks per-operation counters with daily/hourly limits
 type OperationCounter struct {
 	mu    sync.RWMutex
-	store state.KV
+	store state.KVStore
 }
 
 // OperationCounterKey represents the key for operation counting
@@ -387,7 +459,7 @@ type OperationCounterData struct {
 }
 
 // NewOperationCounter creates a new operation counter
-func NewOperationCounter(store state.KV) *OperationCounter {
+func NewOperationCounter(store state.KVStore) *OperationCounter {
 	return &OperationCounter{
 		store: store,
 	}

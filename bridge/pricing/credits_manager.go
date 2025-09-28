@@ -31,10 +31,10 @@ func NewManager(sched *ScheduleProvider, querier *l0api.Querier, rr *l0.RoundRob
 
 // EnsureCredits ensures a key page has sufficient credits, building an AddCredits transaction if needed
 // Returns:
-// - *build.EnvelopeBuilder: The transaction to add credits (nil if sufficient credits already exist)
+// - *build.TransactionBuilder: The transaction to add credits (nil if sufficient credits already exist)
 // - bool: Whether a transaction was built
 // - error: Any error that occurred
-func (m *Manager) EnsureCredits(ctx context.Context, page *url.URL, want uint64, fundFrom *url.URL) (*build.EnvelopeBuilder, bool, error) {
+func (m *Manager) EnsureCredits(ctx context.Context, page *url.URL, want uint64, fundFrom *url.URL) (*build.TransactionBuilder, bool, error) {
 	if page == nil {
 		return nil, false, fmt.Errorf("key page URL cannot be nil")
 	}
@@ -159,12 +159,12 @@ type PageStatus struct {
 }
 
 // BuildBatchTopUp creates multiple AddCredits transactions for pages that need funding
-func (m *Manager) BuildBatchTopUp(ctx context.Context, statuses []PageStatus, targetCredits uint64, fundFrom *url.URL) ([]*build.EnvelopeBuilder, error) {
+func (m *Manager) BuildBatchTopUp(ctx context.Context, statuses []PageStatus, targetCredits uint64, fundFrom *url.URL) ([]*build.TransactionBuilder, error) {
 	if fundFrom == nil {
 		return nil, fmt.Errorf("funding token URL cannot be nil")
 	}
 
-	var envelopes []*build.EnvelopeBuilder
+	var envelopes []*build.TransactionBuilder
 
 	for _, status := range statuses {
 		if !status.NeedsFunding || status.Error != nil {
@@ -297,7 +297,7 @@ func QuoteForGas(gas uint64) (credits uint64, acmeDecimal string) {
 
 	// ACME = credits / CAR
 	creditsDecimal := new(big.Float).SetUint64(credits)
-	carDecimal := new(big.Float).SetUint64(car)
+	carDecimal := new(big.Float).SetFloat64(car)
 
 	acmeFloat := new(big.Float).Quo(creditsDecimal, carDecimal)
 
@@ -329,7 +329,7 @@ func (m *Manager) QuoteForGasWithManager(gas uint64) (credits uint64, acmeDecima
 
 	// ACME = credits / CAR
 	creditsDecimal := new(big.Float).SetUint64(credits)
-	carDecimal := new(big.Float).SetUint64(car)
+	carDecimal := new(big.Float).SetFloat64(car)
 
 	acmeFloat := new(big.Float).Quo(creditsDecimal, carDecimal)
 

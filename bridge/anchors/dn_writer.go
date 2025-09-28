@@ -214,7 +214,7 @@ func (w *DNWriter) generateAnchorURL(basePath string) (*url.URL, error) {
 }
 
 // submitWithRetry submits a transaction with retry logic
-func (w *DNWriter) submitWithRetry(ctx context.Context, envelope *build.EnvelopeBuilder) (string, error) {
+func (w *DNWriter) submitWithRetry(ctx context.Context, envelope *build.TransactionBuilder) (string, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= w.config.MaxRetries; attempt++ {

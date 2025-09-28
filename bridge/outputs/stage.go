@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // StagedOutput represents an output that has been staged for submission

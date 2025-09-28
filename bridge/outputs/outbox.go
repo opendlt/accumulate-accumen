@@ -6,8 +6,7 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v3"
-	"gitlab.com/accumulatenetwork/accumulate/exp/apiutil"
-	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 )
 
 // OutboxItem represents a queued envelope for submission
@@ -44,12 +43,8 @@ func (o *Outbox) Close() error {
 }
 
 // Enqueue adds an envelope to the submission queue
-func (o *Outbox) Enqueue(env *build.EnvelopeBuilder) (string, error) {
-	// Build the envelope
-	envelope, err := env.Done()
-	if err != nil {
-		return "", fmt.Errorf("failed to build envelope: %w", err)
-	}
+func (o *Outbox) Enqueue(envelope *messaging.Envelope) (string, error) {
+	// Use the provided envelope directly
 
 	// Serialize envelope
 	envBytes, err := envelope.MarshalBinary()
@@ -235,7 +230,7 @@ func randomString(length int) string {
 }
 
 // createOpSummary creates a human-readable summary of the envelope operations
-func createOpSummary(envelope *apiutil.Envelope) string {
+func createOpSummary(envelope *messaging.Envelope) string {
 	if envelope == nil || len(envelope.Transaction) == 0 {
 		return "empty envelope"
 	}

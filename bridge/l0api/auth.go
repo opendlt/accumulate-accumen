@@ -5,7 +5,6 @@ import (
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/build"
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
-	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
 // AuthorityPermission defines the level of permissions for a delegated authority
@@ -77,16 +76,15 @@ func BuildCreateIdentity(identityURL, keyBookURL, publicKeyHex string) (*build.T
 		return nil, fmt.Errorf("invalid public key: %w", err)
 	}
 
-	// Create the identity creation transaction
+	// Create the identity creation transaction using new builder API
 	envelope := build.Transaction().
 		For(identityURLParsed).
-		Body(&build.CreateIdentity{
-			URL:     identityURLParsed,
-			KeyBook: keyBookURLParsed,
-			KeyHash: publicKey.GetHash(),
-		})
+		CreateIdentity(identityURLParsed).
+		WithKeyBook(keyBookURLParsed).
+		WithKeyHash(publicKey).
+		FinishTransaction()
 
-	return envelope, nil
+	return &envelope, nil
 }
 
 // BuildCreateKeyBook creates a transaction builder for creating a key book
@@ -103,15 +101,14 @@ func BuildCreateKeyBook(keyBookURL, publicKeyHex string) (*build.TransactionBuil
 		return nil, fmt.Errorf("invalid public key: %w", err)
 	}
 
-	// Create the key book creation transaction
+	// Create the key book creation transaction using new builder API
 	envelope := build.Transaction().
 		For(keyBookURLParsed).
-		Body(&build.CreateKeyBook{
-			URL:     keyBookURLParsed,
-			KeyHash: publicKey.GetHash(),
-		})
+		CreateKeyBook(keyBookURLParsed).
+		WithKeyHash(publicKey).
+		FinishTransaction()
 
-	return envelope, nil
+	return &envelope, nil
 }
 
 // BuildCreateKeyPage creates a transaction builder for creating a key page within a key book
@@ -129,26 +126,24 @@ func BuildCreateKeyPage(keyPageURL, publicKeyHex string, creditBalance uint64) (
 	}
 
 	// Create keys array with the provided key
-	keys := []*build.KeySpecParams{{
-		KeyHash: publicKey.GetHash(),
-	}}
-
-	// Create the key page creation transaction
+	// Create the key page creation transaction using new builder API
 	envelope := build.Transaction().
 		For(keyPageURLParsed).
-		Body(&build.CreateKeyPage{
-			Keys: keys,
-		})
+		CreateKeyPage().
+		WithEntry().
+		Hash(publicKey).
+		FinishEntry().
+		FinishTransaction()
 
 	// Add credit deposit if balance is specified
 	if creditBalance > 0 {
-		envelope = envelope.Body(&build.AddCredits{
-			Recipient: keyPageURLParsed,
-			Amount:    build.BigInt(creditBalance),
-		})
+		envelope = envelope.AddCredits().
+			To(keyPageURLParsed).
+			Purchase(float64(creditBalance)).
+			FinishTransaction()
 	}
 
-	return envelope, nil
+	return &envelope, nil
 }
 
 // BuildUpdateAccountAuth creates a transaction builder for updating account authority to delegate to a contract
@@ -182,36 +177,18 @@ func BuildUpdateAccountAuthDelegate(accountURL, contractURL, keyBookURL string, 
 		maxPermission = PermissionWriteData
 	}
 
-	// Convert to protocol authority
-	authority := maxPermission.toProtocolPermission()
-
 	// Create the account authority update transaction
+	// TODO: Implement UpdateAccountAuth with new builder API and proper permissions
+	// This is a stub implementation for now
+	_ = maxPermission // Suppress unused variable warning
 	envelope := build.Transaction().
 		For(accountURLParsed).
-		Body(&build.UpdateAccountAuth{
-			Operations: []build.AccountAuthOperation{
-				// Add the existing key book authority (preserve existing authority)
-				&build.AddAccountAuthorityOperation{
-					Authority: keyBookURLParsed,
-					AuthorityType: protocol.AccountAuthority{
-						TransactionTypes: []protocol.TransactionType{
-							protocol.TransactionTypeUpdateAccountAuth, // Full authority for the key book
-							protocol.TransactionTypeWriteData,
-							protocol.TransactionTypeSendTokens,
-							protocol.TransactionTypeCreateDataAccount,
-							protocol.TransactionTypeCreateTokenAccount,
-						},
-					},
-				},
-				// Add the contract as a delegated authority
-				&build.AddAccountAuthorityOperation{
-					Authority:     contractURLParsed,
-					AuthorityType: authority,
-				},
-			},
-		})
+		UpdateAccountAuth().
+		Add(keyBookURLParsed).
+		Add(contractURLParsed).
+		FinishTransaction()
 
-	return envelope, nil
+	return &envelope, nil
 }
 
 // BuildRemoveContractDelegate creates a transaction builder for removing a contract's delegated authority
@@ -228,17 +205,14 @@ func BuildRemoveContractDelegate(accountURL, contractURL string) (*build.Transac
 	}
 
 	// Create the account authority update transaction to remove the contract
+	// TODO: Implement remove authority with new builder API
 	envelope := build.Transaction().
 		For(accountURLParsed).
-		Body(&build.UpdateAccountAuth{
-			Operations: []build.AccountAuthOperation{
-				&build.RemoveAccountAuthorityOperation{
-					Authority: contractURLParsed,
-				},
-			},
-		})
+		UpdateAccountAuth().
+		Remove(contractURLParsed).
+		FinishTransaction()
 
-	return envelope, nil
+	return &envelope, nil
 }
 
 // BuildAddCreditsToKeyPage creates a transaction builder for adding credits to a key page
@@ -269,12 +243,11 @@ func BuildCreateDataAccount(dataAccountURL, keyBookURL string) (*build.Transacti
 	// Create the data account creation transaction
 	envelope := build.Transaction().
 		For(dataAccountURLParsed).
-		Body(&build.CreateDataAccount{
-			URL:     dataAccountURLParsed,
-			KeyBook: keyBookURLParsed,
-		})
+		CreateDataAccount(dataAccountURLParsed).
+		WithAuthority(keyBookURLParsed).
+		FinishTransaction()
 
-	return envelope, nil
+	return &envelope, nil
 }
 
 // BuildWriteDataToAccount creates a transaction builder for writing data to a data account

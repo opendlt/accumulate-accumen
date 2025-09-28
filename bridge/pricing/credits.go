@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gitlab.com/accumulatenetwork/accumulate/pkg/url"
+	"gitlab.com/accumulatenetwork/accumulate/pkg/types/messaging"
 	"gitlab.com/accumulatenetwork/accumulate/protocol"
 )
 
@@ -83,12 +84,16 @@ func (cm *CreditManager) CalculateTransactionCost(tx *protocol.Transaction) (uin
 	// Base cost
 	cost := cm.config.BaseTxCost
 
-	// Add data size cost
-	txSize := uint64(len(tx.Body))
+	// Add data size cost - calculate transaction binary size
+	txData, err := tx.MarshalBinary()
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal transaction: %w", err)
+	}
+	txSize := uint64(len(txData))
 	cost += txSize * cm.config.ByteCost
 
-	// Add signature cost
-	cost += uint64(len(tx.Signature)) * cm.config.SignatureCost
+	// Note: Signature cost is now calculated in envelope cost, not transaction cost
+	// since signatures are moved to the envelope level
 
 	// Apply type multiplier
 	txType := tx.Body.Type()
@@ -100,7 +105,7 @@ func (cm *CreditManager) CalculateTransactionCost(tx *protocol.Transaction) (uin
 }
 
 // CalculateEnvelopeCost calculates the total cost for a transaction envelope
-func (cm *CreditManager) CalculateEnvelopeCost(envelope *protocol.Envelope) (uint64, error) {
+func (cm *CreditManager) CalculateEnvelopeCost(envelope *messaging.Envelope) (uint64, error) {
 	if envelope == nil {
 		return 0, fmt.Errorf("envelope cannot be nil")
 	}
@@ -262,15 +267,17 @@ func (cc *CreditCalculator) OptimizeForCost(tx *protocol.Transaction) ([]string,
 	var suggestions []string
 
 	// Analyze transaction and suggest optimizations
-	txSize := len(tx.Body)
+	txData, err := tx.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal transaction: %w", err)
+	}
+	txSize := len(txData)
 	if txSize > 1000 {
 		suggestions = append(suggestions, "Consider reducing transaction data size to lower costs")
 	}
 
-	sigCount := len(tx.Signature)
-	if sigCount > 1 {
-		suggestions = append(suggestions, fmt.Sprintf("Transaction has %d signatures, consider using multi-sig efficiently", sigCount))
-	}
+	// Note: Signature analysis moved to envelope level since signatures are now in envelopes
+	// sigCount analysis would need envelope context
 
 	return suggestions, nil
 }
